@@ -23,7 +23,9 @@ from src.automation.wehago._common import (
 )
 # 마감/마감해제 버튼 읽기·대기 헬퍼(제네릭, WSC_LUXButton '마감'/'마감해제') 재사용.
 # 단 확인 모달은 SWTA0112 가 '마감(F3)'(원천세는 '확인')이라 로컬 _click_modal_button 사용.
-from src.automation.wehago.run_swta0101 import _wait_close_button, _read_close_button
+from src.automation.wehago.run_swta0101 import (
+    _wait_close_button, _read_close_button, compute_half_period, half_period_target,
+)
 from src.utils.human import net_mult
 
 # 지방소득세 특별징수 납부서 SmartA 메뉴 코드 (라이브 확인 2026-07-21, SWTA 계열).
@@ -107,34 +109,41 @@ async def _read_period_state(page):
     }""")
 
 
-async def _set_jitax_period(page, year: int, month: int) -> None:
-    """SWTA0112 기간 설정: 귀속년월(월 단일) + 지급년월(연/월 범위 start=end=month). 3회 검증."""
-    mm = f"{month:02d}"
+async def _set_jitax_period(page, year: int, start_month: int, end_month: int) -> None:
+    """SWTA0112 기간 설정 (매월/반기 공통). 3회 검증.
+
+    - 귀속년월(단일) = end_month  (매월=대상월, 반기=반기 종료월; 연도는 사업연도 고정)
+    - 지급년월(범위) = year/start_month ~ year/end_month
+      (매월 start==end, 반기 상반기=01~06 / 하반기=07~12)  — 라이브 확인 값.
+    """
     y = str(year)
+    sm, em = f"{start_month:02d}", f"{end_month:02d}"
     for attempt in range(1, 4):
         # ★순서 불변식(라이브 확인): 귀속년월을 건드리면 지급년월 '월'이 blank 로 초기화된다.
         #   따라서 반드시 귀속을 먼저, 지급을 마지막에 설정한다.
-        # 1) 귀속년월 월 (연도는 사업연도 고정 텍스트)
-        await _select_month(page, 0, 0, month)
-        # 2) 지급년월 연도 보정 — 필요할 때만(기본 사업연도라 보통 불필요). 지급 월 직전.
+        # 1) 귀속년월 = 종료월(단일). (연도는 사업연도 고정 텍스트)
+        await _select_month(page, 0, 0, end_month)
+        # 2) 지급년월 연도 보정 — 목표와 다를 때만(매월은 기본 사업연도, 반기는 공란일 수 있음).
         pre = await _read_period_state(page)
         jg = pre.get("jigeup") or ["", "", "", ""]
         if len(jg) >= 3 and (jg[0] != y or jg[2] != y):
             await _set_year_div(page, 1, 0, year)
             await _set_year_div(page, 1, 2, year)
-        # 3) 지급년월 시작월(종료월 자동연동) — 마지막(이후 귀속을 건드리지 않음)
-        await _select_month(page, 1, 0, month)
+        # 3) 지급년월 시작월 → (범위가 다르면) 종료월. 시작만 선택 시 종료 자동연동(매월).
+        await _select_month(page, 1, 0, start_month)
+        if start_month != end_month:
+            await _select_month(page, 1, 1, end_month)
 
         await asyncio.sleep(net_mult(0.3))
         state = await _read_period_state(page)
-        gui_ok = state.get("gui") == [mm]
-        jigeup_ok = state.get("jigeup") == [y, mm, y, mm]
+        gui_ok = state.get("gui") == [em]
+        jigeup_ok = state.get("jigeup") == [y, sm, y, em]
         log(f"    [JITAX_PAY] 기간 검증(시도 {attempt}): 귀속={state.get('gui')} 지급={state.get('jigeup')}")
         if gui_ok and jigeup_ok:
             return
         await asyncio.sleep(net_mult(0.5))
     raise RuntimeError(
-        f"[JITAX_PAY] 기간 설정 검증 실패(3회): 귀속년월/지급년월이 {year}/{mm} 로 "
+        f"[JITAX_PAY] 기간 설정 검증 실패(3회): 귀속년월={em} / 지급년월={y}/{sm}~{y}/{em} 로 "
         f"세팅되지 않음 — 위젯 구조 변경 의심."
     )
 
@@ -238,22 +247,27 @@ async def run_jitax_payment(page, year: int = None, month: int = None,
     else:
         log(f"[JITAX_PAY] 신고구분: DB report_cycle='{cycle}' (페이지 라벨='{page_cycle}')")
 
-    if cycle == "반기":
-        # 반기 위젯(귀속년월 단일 vs 반기 범위) 라이브 미검증 — 단월 오마감 방지 위해 loud 실패.
-        raise RuntimeError(
-            "[JITAX_PAY] 반기 신고구분 — 지방세 납부서 반기 처리 미검증. "
-            "반기 수임처로 라이브 확인 후 구현 필요."
-        )
-    if cycle != "매월":
+    if cycle not in ("매월", "반기"):
         raise RuntimeError(
             "[JITAX_PAY] 신고구분 확정 불가(DB 공란 + 페이지 라벨 판별 실패). 마감 중단."
         )
 
-    # [3] 기간 설정 (매월: 귀속년월=대상월, 지급년월=대상월 범위)
-    if year is None or month is None:
-        year, month = compute_target_period()
-    log(f"[JITAX_PAY] 매월 → {year}년 {month:02d}월")
-    await _set_jitax_period(page, year, month)
+    # [3] 기간 설정
+    if cycle == "반기":
+        # 원천세와 동일: 6·12월만 실행. 상반기=(y,1,6)/하반기=(y,7,12). 귀속=종료월.
+        target, skip = half_period_target(year, month)
+        if skip:
+            log(f"[JITAX_PAY] 반기 → 비신고월({target.month}월) 스킵 (반기는 6·12월만)")
+            return "반기"
+        y, sm, em = compute_half_period(target)
+        half = "상반기(01~06)" if sm == 1 else "하반기(07~12)"
+        log(f"[JITAX_PAY] 반기 → {y}년 {sm:02d}~{em:02d}월 ({half})")
+        await _set_jitax_period(page, y, sm, em)
+    else:  # 매월
+        if year is None or month is None:
+            year, month = compute_target_period()
+        log(f"[JITAX_PAY] 매월 → {year}년 {month:02d}월")
+        await _set_jitax_period(page, year, month, month)
 
     # [4] 조회
     await _click_jitax_search(page)
