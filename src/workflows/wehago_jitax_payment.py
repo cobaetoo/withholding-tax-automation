@@ -5,9 +5,9 @@
   1. 수임처 급여 페이지 진입 (사업자번호 우선 → 이름 fallback)
   2. 지방소득세 특별징수 납부서 처리 (run_jitax_payment)
 
-★스캐폴드: run_jitax_payment 는 라이브 발견 전까지 네비게이션+기간설정까지만 수행하고
-  액션은 NotImplementedError. 아래 반기 스킵/역충전 로직은 SWTA 미러이며 지방세 주기
-  radio 유무는 LIVE-VERIFY.
+run_jitax_payment 는 네비게이션→기간설정→마감까지 수행(라이브 확인 2026-07, 매월·반기).
+아래 반기 스킵/역충전 로직은 SWTA 미러이며, 지방세 주기는 라디오가 아니라 화면의
+'신고 : 매월/반기' 라벨이 ground truth 임이 라이브 확인됨.
 """
 from datetime import datetime
 
@@ -46,7 +46,7 @@ class WehagoJitaxPaymentWorkflow(BaseWorkflow):
         client_id = kwargs.get("client_id")              # 역충전(backfill)용
 
         # ── 반기 월 필터링(6·12월만) — SWTA 미러 ────────────────────────
-        # LIVE-VERIFY: 지방소득세도 원천세와 동일한 매월/반기 신고주기인지 라이브 확인.
+        # 지방소득세도 원천세와 동일한 매월/반기 신고주기 (라이브 확인 2026-07).
         if report_cycle == "반기":
             _target_m = month if month else datetime.now().month
             if _target_m not in (6, 12):
@@ -81,9 +81,9 @@ class WehagoJitaxPaymentWorkflow(BaseWorkflow):
                     report_cycle=report_cycle, client_id=client_id,
                 )
                 state.after_step(job_id, "run_jitax_payment")
-                # 역충전: DB report_cycle 이 비어있었고 라디오(ground truth)에서 주기를
-                # 얻었으면 DB 에 기록(1번 메뉴 DB 와 동일 clients 테이블). SWTA 미러.
-                # LIVE-VERIFY: 지방세에 주기 radio 가 없으면 이 경로는 타지 않음.
+                # 역충전: DB report_cycle 이 비어있었고 '신고 : 매월/반기' 라벨(ground
+                # truth)에서 주기를 얻었으면 DB 에 기록(1번 메뉴 DB 와 동일 clients 테이블).
+                # SWTA 미러 — 이 화면은 라디오가 없고 라벨이 ground truth(라이브 확인 2026-07).
                 if (not report_cycle) and used_cycle in ("매월", "반기") and client_id:
                     self._backfill_report_cycle(client_id, used_cycle)
             except Exception as e:
@@ -94,7 +94,7 @@ class WehagoJitaxPaymentWorkflow(BaseWorkflow):
 
     @staticmethod
     def _backfill_report_cycle(client_id: int, cycle: str) -> None:
-        """DB report_cycle 이 비어있을 때 위하고 라디오(ground truth) 값을 역충전.
+        """DB report_cycle 이 비어있을 때 위하고 라벨(ground truth) 값을 역충전.
 
         SWTA(wehago_swta.py) 와 동일 clients 테이블·동일 로직. 새로가져오기 시
         스크랩값으로 덮어씀.

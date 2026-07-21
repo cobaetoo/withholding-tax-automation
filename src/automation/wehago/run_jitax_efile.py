@@ -9,7 +9,10 @@
   - 수임처 picker + 코드도움 = SWER0101 과 동일.
   - 제작(F4) → '변환파일 비밀번호' 모달 + '전자신고 파일 제작(Enter)' 버튼 = SWER0101 과 동일
     → set_password_and_submit 재사용. (비밀번호 규칙만 다름: 영문 소문자+숫자만)
-  - ★저장처(WehagoNTS vs 위택스): LIVE-VERIFY — 우선 SWER0101 처럼 WehagoNTS 폴더 저장 가정.
+  - ★저장처: SWER0101 과 동일하게 WehagoNTS 폴더 저장으로 확인됨.
+  - ★전제조건: 지방소득세특별징수납부서(SWTA0112)를 먼저 마감해야 전자신고 데이터가
+    생성됨 (마감 안 하면 수임처 조회 시 데이터 없음 → 파일 미생성). 원천세의
+    '원천이행상황 마감 → 원천전자신고 제작' 과 동일한 순서 의존성.
 
 사전 조건:
 - page 가 이미 SmartA 급여 페이지에 있어야 함
@@ -192,7 +195,7 @@ async def run_jitax_efile(page, password, nts_folder="지방소득세전자신�
             "비밀번호 규칙(영문 소문자+숫자) 미충족 또는 처리 실패."
         )
 
-    # [7] 저장 — LIVE-VERIFY: WehagoNTS 폴더 저장(SWER0101 동일 가정) vs 위택스.
+    # [7] 저장 — WehagoNTS 폴더 저장 (SWER0101 동일, 라이브 확인 2026-07-21).
     log("[JITAX_EFILE] WehagoNTS 폴더 선택...")
     loop = asyncio.get_event_loop()
     if save_dir:
@@ -207,7 +210,7 @@ async def run_jitax_efile(page, password, nts_folder="지방소득세전자신�
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 독립 실행 (Part B 라이브 발견/스모크용 CDP-attach 진입점)
+# 독립 실행 (스모크용 CDP-attach 진입점)
 # ═══════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":

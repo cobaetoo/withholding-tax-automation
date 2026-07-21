@@ -5,9 +5,9 @@
   1. 수임처 급여 페이지 진입 (사업자번호 우선 → 이름 fallback)
   2. 지방소득세 특별징수 전자신고 파일 제작 (run_jitax_efile)
 
-★스캐폴드: run_jitax_efile 는 라이브 발견 전까지 네비게이션+지급기간까지만 수행하고
-  온-페이지 로직은 NotImplementedError. needs_password 는 SWER 미러로 True 설정하되
-  실제 필요 여부는 LIVE-VERIFY.
+★전제조건: 지방소득세특별징수납부서(SWTA0112)를 먼저 마감해야 전자신고 데이터가
+  생성됨. 원천세의 '원천이행상황 마감 → 원천전자신고 제작' 과 동일한 순서 의존성.
+구현·라이브 검증 완료(2026-07-21). needs_password=True (전자신고 파일 비밀번호 필요).
 """
 from src.utils.human import human_delay
 from src.utils.save_path import make_save_dir
@@ -21,7 +21,7 @@ from src.batch.state import StateManager
     portal="wehago",
     display_name="지방소득세특별징수전자신고",
     enabled=True,
-    needs_password=True,   # LIVE-VERIFY: 지방세 전자신고 파일 비밀번호 필요 여부 라이브 확인
+    needs_password=True,   # 지방세 전자신고 파일 비밀번호 필요 (라이브 확인 2026-07-21)
 )
 class WehagoJitaxEfileWorkflow(BaseWorkflow):
     steps = [
