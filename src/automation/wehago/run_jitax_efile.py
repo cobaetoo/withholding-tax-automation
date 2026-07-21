@@ -102,28 +102,33 @@ async def run_jitax_efile(page, password, nts_folder="지방소득세전자신�
     log(f"  코드도움: {confirmed}")
     await asyncio.sleep(net_mult(2.0))
 
-    # [4] 제작(F4) 버튼 클릭 — Playwright real click (JS click skips disabled buttons)
+    # [4] 제작(F4) 버튼 클릭 — 잔여 다이얼로그(수임처 코드도움 등) 정리 후 클릭.
+    #     ★어댑터 경로(사업자번호 재진입)에서 _isDialog WSC_LUXDialog 오버레이가 제작(F4)
+    #     Playwright 클릭을 인터셉트하는 사례 확인 → dismiss 후 클릭, Playwright 실패 시
+    #     JS 클릭 폴백(오버레이 pointer-events 인터셉트를 우회). 수임처 선택됨=버튼 활성.
     log("[JITAX_EFILE] 제작(F4) 클릭...")
+    await dismiss_dialogs(page)
+    await asyncio.sleep(net_mult(0.5))
+    clicked_f4 = False
     try:
         f4_btn = page.locator('button.WSC_LUXButton:has-text("제작(F4)")')
         if await f4_btn.count() > 0:
             await f4_btn.first.click(timeout=5000)
+            clicked_f4 = True
             log("  clicked (Playwright)")
-        else:
-            log("  F4 button not found, trying JS fallback...")
-            clicked_f4 = await page.evaluate("""() => {
-                const all = document.querySelectorAll('button.WSC_LUXButton');
-                for (const btn of all) {
-                    if (btn.textContent.trim() === '제작(F4)') {
-                        const r = btn.getBoundingClientRect();
-                        if (r.y < 200 && r.width > 0) { btn.click(); return true; }
-                    }
-                }
-                return false;
-            }""")
-            log(f"  clicked (JS): {clicked_f4}")
     except Exception as e:
-        log(f"  Playwright click error: {e}")
+        log(f"  Playwright click 실패({type(e).__name__}) → 다이얼로그 정리 후 JS 폴백")
+        await dismiss_dialogs(page)
+    if not clicked_f4:
+        js_ok = await page.evaluate("""() => {
+            for (const btn of document.querySelectorAll('button.WSC_LUXButton')) {
+                if (btn.textContent.trim() === '제작(F4)' && btn.offsetWidth > 0) {
+                    btn.click(); return true;
+                }
+            }
+            return false;
+        }""")
+        log(f"  clicked (JS 폴백): {js_ok}")
 
     # [5] 모달 대기: 참고사항 vs 변환파일 비밀번호 (SWER0101 동일)
     log("[JITAX_EFILE] 모달 대기...")
