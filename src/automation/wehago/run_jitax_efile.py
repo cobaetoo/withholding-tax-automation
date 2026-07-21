@@ -1,15 +1,15 @@
-"""지방소득세 특별징수 전자신고 자동화 — 스캐폴드 (원천전자신고 run_swer0101.py 의 지방세 카운터파트)
+"""지방소득세 특별징수 전자신고 자동화 (SWER0109) — 원천전자신고 run_swer0101.py 의 지방세 카운터파트.
 
-원천전자신고(SWER0101)와 동일한 개념: 같은 위하고(SmartA)에서 **다른 메뉴 페이지**로
-들어가 지급기간 설정 → 수임처 선택 → 제작 → 비밀번호 → 파일 저장. 유일한 실질 차이는
-SmartA 메뉴 코드(SWER0101 → 지방세 코드)와 저장처(WehagoNTS vs 위택스)이다.
+원천전자신고(SWER0101)와 동일한 흐름: 같은 위하고(SmartA)에서 다른 메뉴로 들어가
+지급기간 → 수임처 선택 → 제작(F4) → 변환파일 비밀번호 → 파일 제작 → 저장.
 
-★현재 상태(Part A 스캐폴드):
-  - 네비게이션(SWSA0101 SPA 초기화 → 메뉴 코드 URL 교체)과 지급기간 설정은 SWER 재사용.
-  - 메뉴 코드(JITAX_EFILE_MENU_CODE)와 온-페이지 로직(수임처 picker + 제작(F4) +
-    변환파일 비밀번호 모달 + 저장처)은 라이브 발견 후 채운다.
-  - 참고: 비밀번호 모달 로직이 SWER 과 동일하면 run_swer0101.set_password_and_submit 를
-    재사용, 저장이 WehagoNTS 면 _nts.select_nts_folder 재사용(위택스면 별도 구현).
+라이브 확인(2026-07-21, [테스트]리틀치프코리아):
+  - 메뉴 코드 SWER0109 (click_menu SWSA0101 → goto_menu_page SWER0109 코드-스왑).
+  - 지급기간 = 표준 구조(div4+sprite2) → set_period_fields 그대로 동작.
+  - 수임처 picker + 코드도움 = SWER0101 과 동일.
+  - 제작(F4) → '변환파일 비밀번호' 모달 + '전자신고 파일 제작(Enter)' 버튼 = SWER0101 과 동일
+    → set_password_and_submit 재사용. (비밀번호 규칙만 다름: 영문 소문자+숫자만)
+  - ★저장처(WehagoNTS vs 위택스): LIVE-VERIFY — 우선 SWER0101 처럼 WehagoNTS 폴더 저장 가정.
 
 사전 조건:
 - page 가 이미 SmartA 급여 페이지에 있어야 함
@@ -20,64 +20,185 @@ import sys
 
 from src.automation.wehago._common import (
     log, dismiss_dialogs, goto_menu_page, set_period_fields,
-    compute_target_period, click_menu,
+    click_codehelp_confirm, compute_target_period, click_menu,
 )
+from src.automation.wehago._nts import select_nts_folder
+# 변환파일 비밀번호 입력 + 전자신고 파일 제작(Enter) — SWER0101 과 동일 메커니즘 재사용.
+from src.automation.wehago.run_swer0101 import set_password_and_submit
 from src.utils.human import net_mult
 
-
-# ═══════════════════════════════════════════════════════════════════════
-# TODO(LIVE): 지방소득세 특별징수 전자신고 SmartA 메뉴 코드.
-#   원천세 = "SWER0101". 캡처 방법은 run_jitax_payment.py 상단 주석과 동일
-#   (사이드바 a#<CODE>.text_link id, [A-Z]+\d+ 형태).
-JITAX_EFILE_MENU_CODE = "<<TODO_DISCOVER_LIVE>>"
-# ═══════════════════════════════════════════════════════════════════════
+# 지방소득세 특별징수 전자신고 SmartA 메뉴 코드 (라이브 확인 2026-07-21, SWER 계열).
+JITAX_EFILE_MENU_CODE = "SWER0109"
 
 
 async def run_jitax_efile(page, password, nts_folder="지방소득세전자신고",
                           year: int = None, month: int = None,
                           save_dir: str = None):
-    """지방소득세 특별징수 전자신고 전체 자동화 (스캐폴드).
-
-    Args 계약은 run_swer0101 과 동일. 현재는 네비게이션 + 지급기간까지만 수행하고
-    온-페이지 로직(수임처/제작/비밀번호/저장)은 NotImplementedError.
-    """
+    """지방소득세 특별징수 전자신고 전체 자동화. run_swer0101 과 동일 계약."""
     # [0] SPA 라우팅 초기화: SWSA0101 사이드바 클릭
     log("[JITAX_EFILE] 급여자료입력(SWSA0101) 사이드바 클릭 (SPA 라우팅 초기화)...")
     await click_menu(page, "SWSA0101")
     await asyncio.sleep(net_mult(3.0))
     await dismiss_dialogs(page)
 
-    # [1] 지방소득세 특별징수 전자신고 메뉴 이동 (URL 경로 교체)
-    assert JITAX_EFILE_MENU_CODE != "<<TODO_DISCOVER_LIVE>>", (
-        "[JITAX_EFILE] JITAX_EFILE_MENU_CODE 미설정 — 라이브 발견(Part B) 후 채울 것"
-    )
+    # [1] SWER0109 이동 (URL 경로 교체)
     log(f"[JITAX_EFILE] 지방소득세특별징수전자신고 이동 (menu={JITAX_EFILE_MENU_CODE})...")
     await goto_menu_page(page, JITAX_EFILE_MENU_CODE)
     await asyncio.sleep(net_mult(3.0))
-    await dismiss_dialogs(page)
-    # LIVE-VERIFY: 진입 안내 모달/제출자등록 오버레이가 있으면 run_swer0101.py:169-193 의
-    #   z-index overlay 정리 루프를 이식.
 
-    # [2] 지급기간 설정 — SWER 미러.
-    #     LIVE-VERIFY: set_period_fields DOM 호환(_common.py:1206) — 지방세 페이지 확인.
+    # 모달 닫기 (제출자등록 안내 등) + z-index overlay 정리 (SWER0101 동일)
+    log("[JITAX_EFILE] 모달 확인...")
+    await dismiss_dialogs(page)
+    for _ in range(5):
+        closed = await page.evaluate("""() => {
+            const all = document.querySelectorAll('*');
+            for (const el of all) {
+                try {
+                    const cs = window.getComputedStyle(el);
+                    if (cs.position !== 'fixed' || cs.display === 'none'
+                        || parseInt(cs.zIndex) < 1000 || el.offsetWidth < 100) continue;
+                    const txt = el.textContent.trim();
+                    if (txt.length === 0) continue;
+                    const btns = el.querySelectorAll('button');
+                    for (const btn of btns) {
+                        const t = btn.textContent.trim();
+                        if ((t === '확인' || t === '닫기' || t === 'X') && btn.offsetWidth > 0) {
+                            btn.click(); return t;
+                        }
+                    }
+                } catch(e) {}
+            }
+            return null;
+        }""")
+        if not closed:
+            break
+        log(f"    overlay closed ({closed})")
+        await asyncio.sleep(0.5)
+
+    # [2] 지급기간 설정 (표준 구조 → set_period_fields 그대로)
     if year is None or month is None:
         year, month = compute_target_period()
     log(f"[JITAX_EFILE] 지급기간: {year}년 {month:02d}월")
     await set_period_fields(page, year, month, month)
 
-    # ═══════════════════════════════════════════════════════════════════════
-    # TODO(LIVE): 지방소득세 전자신고 온-페이지 로직 (원천전자신고 SWER 미러):
-    #   - 수임처 아이콘 클릭 + 코드도움 확인  (run_swer0101.py:202-220)
-    #   - 제작(F4) 클릭                       (run_swer0101.py:222-244)
-    #   - 변환파일 비밀번호 모달 대기/입력     (run_swer0101.py:245-312;
-    #                                          동일하면 set_password_and_submit 재사용)
-    #   - 파일 저장  ★NTS(_nts.select_nts_folder) vs 위택스/기타 — 라이브 확인 필수.
-    #   확정 전까지 loud 실패(전자신고 파일 미산출을 성공으로 오인 방지).
-    # ═══════════════════════════════════════════════════════════════════════
-    raise NotImplementedError(
-        "[JITAX_EFILE] 온-페이지 로직 미구현 — 라이브 발견(Part B) 후 구현. "
-        f"현재 네비게이션+지급기간까지만 검증 가능(menu={JITAX_EFILE_MENU_CODE})."
-    )
+    # [3] 수임처 아이콘 → 코드도움 확인 (SWER0101 동일)
+    log("[JITAX_EFILE] 수임처 아이콘 클릭...")
+    await page.evaluate("""() => {
+        const items = document.querySelectorAll('#SearchMain .item');
+        for (const item of items) {
+            const title = item.querySelector('.item_title, strong');
+            if (!title || !title.textContent.includes('수임처')) continue;
+            const btns = item.querySelectorAll('button.WSC_LUXButton');
+            for (const btn of btns) {
+                const r = btn.getBoundingClientRect();
+                if (r.width > 0 && r.height > 0 && !btn.textContent.trim()) {
+                    btn.click(); return;
+                }
+            }
+        }
+    }""")
+    await asyncio.sleep(net_mult(2.0))
+    confirmed = await click_codehelp_confirm(page)
+    log(f"  코드도움: {confirmed}")
+    await asyncio.sleep(net_mult(2.0))
+
+    # [4] 제작(F4) 버튼 클릭 — Playwright real click (JS click skips disabled buttons)
+    log("[JITAX_EFILE] 제작(F4) 클릭...")
+    try:
+        f4_btn = page.locator('button.WSC_LUXButton:has-text("제작(F4)")')
+        if await f4_btn.count() > 0:
+            await f4_btn.first.click(timeout=5000)
+            log("  clicked (Playwright)")
+        else:
+            log("  F4 button not found, trying JS fallback...")
+            clicked_f4 = await page.evaluate("""() => {
+                const all = document.querySelectorAll('button.WSC_LUXButton');
+                for (const btn of all) {
+                    if (btn.textContent.trim() === '제작(F4)') {
+                        const r = btn.getBoundingClientRect();
+                        if (r.y < 200 && r.width > 0) { btn.click(); return true; }
+                    }
+                }
+                return false;
+            }""")
+            log(f"  clicked (JS): {clicked_f4}")
+    except Exception as e:
+        log(f"  Playwright click error: {e}")
+
+    # [5] 모달 대기: 참고사항 vs 변환파일 비밀번호 (SWER0101 동일)
+    log("[JITAX_EFILE] 모달 대기...")
+    modal_found = False
+    _f4_polls = 20
+    for i in range(_f4_polls):
+        await asyncio.sleep(net_mult(1.0))
+        found = await page.evaluate("""() => {
+            const dialogs = document.querySelectorAll('._isDialog');
+            for (const d of dialogs) {
+                if (d.offsetWidth > 100 && d.textContent.includes('변환파일 비밀번호'))
+                    return 'pwd';
+                if (d.offsetWidth > 100 && d.textContent.includes('참고사항'))
+                    return 'ref';
+            }
+            return null;
+        }""")
+        if found:
+            log(f"  [{i+1}s] modal: {found}")
+            modal_found = True
+            if found == "pwd":
+                break
+            elif found == "ref":
+                log("  참고사항 모달 닫기...")
+                await dismiss_dialogs(page)
+
+    if not modal_found:
+        raise RuntimeError(
+            "[JITAX_EFILE] 제작(F4) 후 변환파일 비밀번호/참고사항 모달이 "
+            f"{_f4_polls}회 폴링 내 미출현 — 네트워크 지연 또는 F4 처리 실패 의심."
+        )
+
+    # 비밀번호 모달 ready 대기
+    _pwd_polls = 15
+    for i in range(_pwd_polls):
+        await asyncio.sleep(net_mult(1.0))
+        if await page.evaluate("""() => {
+            const dialogs = document.querySelectorAll('._isDialog');
+            for (const d of dialogs) {
+                if (d.offsetWidth > 100 && d.textContent.includes('변환파일 비밀번호'))
+                    return true;
+            }
+            return false;
+        }"""):
+            log(f"  [{i+1}s] 비밀번호 modal ready")
+            break
+    else:
+        raise RuntimeError(
+            "[JITAX_EFILE] 변환파일 비밀번호 모달이 ready 상태에 도달하지 않음 "
+            f"({_pwd_polls}회 폴링 초과) — 네트워크 지연 의심."
+        )
+
+    await asyncio.sleep(net_mult(2.0))
+
+    # [6] 비밀번호 입력 + 전자신고 파일 제작 (SWER0101 set_password_and_submit 재사용)
+    log("[JITAX_EFILE] 비밀번호 입력 + 전자신고 파일 제작...")
+    success = await set_password_and_submit(page, password)
+    if not success:
+        raise RuntimeError(
+            "[JITAX_EFILE] 변환파일 비밀번호 제출 실패(3회 재시도 후 실패) — "
+            "비밀번호 규칙(영문 소문자+숫자) 미충족 또는 처리 실패."
+        )
+
+    # [7] 저장 — LIVE-VERIFY: WehagoNTS 폴더 저장(SWER0101 동일 가정) vs 위택스.
+    log("[JITAX_EFILE] WehagoNTS 폴더 선택...")
+    loop = asyncio.get_event_loop()
+    if save_dir:
+        nts_ok = await loop.run_in_executor(None, select_nts_folder, None, save_dir)
+    else:
+        nts_ok = await loop.run_in_executor(None, select_nts_folder, nts_folder)
+
+    if nts_ok:
+        log("[JITAX_EFILE] 완료 - 전자신고 파일 저장 성공")
+    else:
+        log("[JITAX_EFILE] WARNING: NTS 폴더 선택 실패")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -99,7 +220,7 @@ if __name__ == "__main__":
         )
 
         company = input("수임처 이름: ").strip()
-        password = input("전자신고 비밀번호: ").strip()
+        password = input("전자신고 비밀번호(영문 소문자+숫자): ").strip()
         nts_folder = input("저장 폴더명 (기본=지방소득세전자신고): ").strip() or "지방소득세전자신고"
 
         if not company or not password:
