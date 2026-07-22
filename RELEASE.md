@@ -81,12 +81,51 @@ gh api repos/cobaetoo/withholding-tax-releases/contents/version.json -X PUT \
 한글 파일명은 (1) gh 업로드 시 `_.exe` 로 깨지고 (2) updater 의 urllib URL 요청이 `UnicodeEncodeError` 로 실패하므로 반드시 ASCII 여야 한다.
 `version.json` 반영(4단계)은 앱이 새 버전을 인식하는 데 필수이며, 위 `gh api contents` PUT 한 줄로 완료된다 (raw URL 반영에 수십 초~1분 지연 있음).
 
+## 소스 보호 (Cython 네이티브 컴파일)
+
+`python build.py`(기본)는 영업비밀이 집약된 4개 패키지
+(`src/automation`·`src/batch`·`src/utils`·`src/workflows`, 약 65개 모듈)를
+Cython 으로 `.pyd` 로 컴파일해 번들에 넣는다. 이렇게 하면 `pyinstxtractor` 로
+추출해도 해당 모듈은 PYZ 에 `.pyc` 로 존재하지 않고 `_internal/src/...` 의
+네이티브 `.pyd` 로만 남아 디컴파일이 사실상 불가능하다.
+
+**컴파일 제외(순수 .py 유지):** `src/ui/**`(PySide6 Shiboken 충돌),
+`gui_main.py`(진입점), `src/version.py`(build.py/deploy.sh 가 텍스트 파싱),
+`src/config.py`, 모든 `__init__.py`. → 이 모듈들은 여전히 `.pyc` 로 남는다(수용).
+
+### 빌드 PC 전제 (1회 셋업, 사용자 PC 에는 불필요)
+
+```powershell
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+pip install "Cython>=3.0,<3.2"
+python tools/compile_protected.py --check    # 툴체인(Cython+MSVC) 프로브
+```
+
+### 파이프라인
+
+`python build.py` 는 다음 순서로 동작한다(release.py/deploy.sh 는 무수정으로 보호 빌드를 얻음):
+
+1. `tools/compile_protected.py` — `build/native/` 스테이징에 소스 복사 → 4패키지
+   `cythonize` → `.pyd` → 원본 `.py`/`.c` **물리 삭제** → `protected_manifest.json` 기록.
+2. `tools/verify_staging.py` — 스테이징 런타임 등가성 스모크(import 전수·registry·
+   코루틴·컴파일 트리 pytest). 실패 시 빌드 중단.
+3. `verify_bundle(protected=True)` — 번들에서 (a) 보호 모듈이 `.pyd` 로 존재 +
+   (b) **PYZ leak audit**: 보호 모듈이 `.pyc` 로 남아있지 않음. 하나라도 유출되면 릴리스 금지.
+
+- **개발 반복:** `python build.py --no-protect` — 종전과 동일한 순수 PYZ 빌드(컴파일 생략, 빠름).
+  **릴리스에는 절대 사용 금지**(디컴파일 가능).
+- **컴파일 실패 폴백:** 특정 모듈이 컴파일/런타임에 문제면
+  `tools/compile_protected.py` 의 `FALLBACK_EXCLUDE` 에 상대경로를 추가한다.
+  그 모듈만 순수 `.py`(PYZ 잔류)로 남고 나머지는 계속 보호된다(빌드 로그에 WARNING).
+
 ## 릴리스 전 체크리스트 (Defender 오탐 0x800700E1 방지)
 
 매 릴리스마다 해시가 바뀌어 Defender 평판이 리셋되므로 아래를 점검한다.
 
 - [ ] `build.py` Qt 미사용 모듈 exclude 정상 — `verify_bundle()` 통과(WebEngine 제거 / Qt6Widgets 유지 어설션)
-- [ ] `installer.iss` `Compression=zip` 유지(LZMA 휴리스틱 회피)
+- [ ] **소스 보호 leak audit 통과** — 보호 빌드의 `verify_bundle()` 에서 ".pyd 전수" + "PYZ leak audit" green(유출 0건)
+- [ ] (첫 보호 릴리스 1회) `pyinstxtractor` 자가 공격 — 추출 후 보호 모듈 `.pyc` 부재 + `.pyd` 디컴파일 무력 확인
+- [ ] `installer.iss` `Compression=zip` 유지(LZMA 휴리스틱 회피). ★`.pyd` ~65개 증가로 "느슨한 네이티브 바이너리" 표면이 커지므로 첫 보호 릴리스는 VT + 실기기 Defender 풀스캔 필수
 - [ ] (설정 시) VirusTotal 사전 스캔 — `VT_API_KEY` + `vt-cli` 있으면 `release.py --publish` 시 자동 업로드; 탐지 다수(≥10/72)면 릴리스 중단
 - [ ] Microsoft 오탐 제출 — https://www.microsoft.com/en-us/wdsi/filesubmission ("should not be detected") 로 신규 `원천징수자동화.exe` + `whta_setup.exe` 제출 (수일 내 평판 반영)
 - [ ] `tools/add_defender_exclusion.bat` 를 설치 파일과 함께 배포(GitHub 릴리스 에셋 번들 등)

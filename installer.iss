@@ -54,7 +54,9 @@ AlwaysUsePersonalGroup=yes
 SetupIconFile=
 WizardStyle=modern
 
-; 라이선스 표시 안함
+; 사용권 계약(EULA) 표시 — 설치 마법사에서 동의 후 진행.
+; EULA.txt 는 UTF-8 BOM 로 저장(한글 표시). 배포 전 [ ] 플레이스홀더 확정 필수.
+LicenseFile=EULA.txt
 DisableWelcomePage=no
 
 ; 이전 버전 자동 제거

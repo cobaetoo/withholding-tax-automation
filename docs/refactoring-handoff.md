@@ -173,7 +173,7 @@ step 0(`navigate_to_wehago_main`) + step 1(`goto_salary_page`)이 4개 워크플
 2. **보안** — `auth_session.json` Git 히스토리 purge(운영: Supabase 토큰 철회 + filter-repo force-push) + 세션 DPAPI 암호화.
 3. **데이터 정확성** — `raw_data_reader` 삼킴 전파, NHIS PDF 동적 컬럼 매핑, NPS 음수 가드(`max(0,…)`), batch 카운터 통일, `biz_to_mgmt_no` 검증. (세금 정확성 직결.)
 4. **견고성** — `querySelectorAll('*')` 최적화, `goto_salary_page` `window.open`→`context.expect_page`, nexacro 합성이벤트 검증, CDP 단절 복구.
-5. **빌드** — `.spec` 절대경로 동적화 + build.py 단일화, 자동업데이트 인증게이트 전 확인, 코드서명 도입.
+5. **빌드** — ~~`.spec` 절대경로 동적화 + build.py 단일화~~ (완료: `.spec` 폐기, build.py 단일화 + 소스 보호 Cython 컴파일 도입. `RELEASE.md` 소스 보호 섹션 참조), 자동업데이트 인증게이트 전 확인, 코드서명 도입.
 
 > 상세는 초기 심층 검토 결과(7영역) 참조. 각 항목의 정확한 file:line과 권고는 검토 보고서에 있음.
 
