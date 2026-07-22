@@ -56,7 +56,7 @@
 | **TD-08** | 🟡 | ⬜ | correctness | `Portal` enum에 `COMWEL_EDI` 누락 — 다만 **현재 `Portal()` 호출부 0곳이라 잠재 위험** | `src/batch/models.py:18-33` | 향후 enum 사용 시 ValueError, `display_name` 미표시 | 🔍 | 분석 |
 | **TD-09** | 🟡 | ⬜ | 구조 | `auth.py`가 `src.ui.resources.auth_config` 역참조 (utils→ui) | `src/utils/auth.py:18` | 계층 의존 방향 위반 (역방향 간선) | 🔍 | 분석 |
 | **TD-10** | 🟡 | ⬜ | correctness | `mark_crashed_as_recoverable` 포털 필터 없이 전체 running/paused → crashed | `src/batch/db.py:601-624` (쿼리 613-616) | 다중 포털 동시 실행 시 타 포털 배치까지 crashed 처리 | 🔍 | 분석 |
-| **TD-11** | 🟡 | ⬜ | 빌드 | Qt6 네이티브 DLL 잔존(Multimedia/Qml/Quick/Pdf) — Python 바인딩만 exclude | `build.py:30-49` | 번들 383MB (목표 315MB) | 🔍 | 사용자 |
+| **TD-11** | 🟡 | ⬜ | 빌드 | Qt6 네이티브 DLL 잔존(Multimedia/Qml/Quick/Pdf) — Python 바인딩만 exclude | `build.py:31-50` | 번들 383MB (목표 315MB) | 🔍 | 사용자 |
 | **TD-12** | 🟡 | ⬜ | 문서 | 문서 노후/중복 — PRD(MVP), `wehago_automation_guide.md`(폐기 대상), hometax PROGRESS 포트 오기, 사용자 가이드 3종 중복 | 다수 | 신규 작업자 혼란, 포트 오판 | 🔍 | 둘 다 |
 | **TD-13** | 🟡 | ⬜ | 구조·문서 | `engine.run()` 프로덕션 데드코드(러너가 인라인 재구현) + `run_single` 시그니처 문서 오기 | `src/batch/engine.py` / `src/workflows/base.py:37-40` | Wave 3 통합 영역, 문서-코드 불일치 | 🔍 | 분석 |
 | **TD-14** | 🟢 | ⬜ | 레거시 | `sys.path.insert(0, PROJECT_ROOT)` 남발 (**50+곳**, 패키지 코드 내부 포함) | `_*.py` · `src/automation/*/` · `tests/` | 패키지 정비 시 제거 가능 | 🔍 | 사용자 |
@@ -127,7 +127,7 @@
   > `comwel_edi` 문자열 사용처: `src/config.py:38`, `src/workflows/comwel_edi.py:23`, `src/ui/workers/automation_runner.py:749,835,923,1068`, `build.py:176`.
 - **TD-09** `src/utils/auth.py:18` → `from src.ui.resources.auth_config import (AUTH_GRACE_PERIOD_DAYS, BETA_EXPIRES, SUPABASE_ANON_KEY, SUPABASE_URL)`. utils 계층이 ui 계층을 역참조(순환 위험). 상수를 `src/config.py` 등 비-UI 위치로 이동. 🔍
 - **TD-10** `mark_crashed_as_recoverable`(`src/batch/db.py:601-624`)의 쿼리 `:613-616` 가 `WHERE status IN ('running','paused')` — 포털 필터 없음. 재시작 시 타 포털 실행 중 배치까지 crashed 처리. `WHERE portal=?` 추가. 🔍
-- **TD-11** `_QT_EXCLUDE_MODULES`(`build.py:30-49`)가 `PySide6.*` **Python 바인딩만** exclude → 네이티브 DLL 잔존 확인: `dist/원천징수자동화/_internal/PySide6/` 에 `Qt6Multimedia.dll`, `Qt6Pdf.dll`, `Qt6Qml*.dll`, `Qt6Quick*.dll`(Quick3D 포함) 존재. 실측 **398,135,505 B (383MB)**, 목표 315MB. PyInstaller exclude 로는 불가 → **post-build DLL 제거 스크립트** 필요. 🔍
+- **TD-11** `_QT_EXCLUDE_MODULES`(`build.py:31-50`)가 `PySide6.*` **Python 바인딩만** exclude → 네이티브 DLL 잔존 확인: `dist/원천징수자동화/_internal/PySide6/` 에 `Qt6Multimedia.dll`, `Qt6Pdf.dll`, `Qt6Qml*.dll`, `Qt6Quick*.dll`(Quick3D 포함) 존재. 실측 **398,135,505 B (383MB)**, 목표 315MB. PyInstaller exclude 로는 불가 → **post-build DLL 제거 스크립트** 필요. 🔍
 - **TD-12** 잔존 문서 정리. 🔍
   > **정정(2026-07-20):** 루트 `PROGRESS.md` 는 **더 이상 없다**(도메인별 중첩본만 존재). 포트 오기의 실제 위치는 `src/automation/hometax/PROGRESS.md:8`(`9222`)과 `wehago_automation_guide.md:197,205,214,1258`. 실제값은 `src/utils/chrome_cdp.py:16` `CDP_PORT=9223`.
   > **`GEMINI.md` 는 포트에 관해선 정확하다** — 상단에 자체 정확성 경고 배너가 있고 "CDP 포트: 9223(9222 사용 금지)"를 명시. 다만 NHIS 섹션 구식은 그대로(문서 자체가 인정).
@@ -170,7 +170,7 @@ TD-05(`src/batch/db.py:427`) 외에 WHERE 없는 clients 삭제가 **2곳 더** 
 | ID | 항목 | 위치 | 비고 |
 |---|---|---|---|
 | **LV-1** | NPS 국고지원금 col24 분기 등가 가정(통합엑셀 경로 vs 구 govt 엑셀 //2) | `src/utils/data_merger.py:301-327` | 수식 col10+col16−col24. 마지막 실질 수정 `b5e488b`(2026-06-14) — 이후 라이브 확인 근거 없음 |
-| **LV-2** | Defender 무서명 빌드 스모크 1·2단계 (0x800700E1 오탐 회귀) | `build.py:226-` `verify_bundle()` | ⚠ `verify_bundle()` 은 **정적 번들 완전성 검사일 뿐** 실기기 Defender 스모크가 아님. 실기기 게이트는 여전히 수동·미코드화. v1.0.5 도 무서명·무스캔 출하됨 |
+| **LV-2** | Defender 무서명 빌드 스모크 1·2단계 (0x800700E1 오탐 회귀) | `build.py:247-` `verify_bundle()` | ⚠ `verify_bundle()` 은 **정적 번들 완전성 검사일 뿐** 실기기 Defender 스모크가 아님. 실기기 게이트는 여전히 수동·미코드화. v1.0.5 도 무서명·무스캔 출하됨. ★소스 보호(Cython) 도입으로 `_internal/src` 에 **.pyd 65개 추가**→"느슨한 네이티브 바이너리" 휴리스틱 표면 증가. 첫 보호 릴리스는 VT+실기기 Defender 풀스캔 필수(`RELEASE.md` 소스 보호 섹션 참조) |
 | **LV-3** | EI v3 조정분(adjustment==0 → 0.9% 보존 자동산정) | `src/utils/data_merger.py:330-366` | 🟦 **부분 해소 가능** — `cfb501c`(2026-07-19) 가 라이브 실측으로 부호규칙을 정정했고 docstring 이 이를 명시. 단 `adjustment==0` 분기 자체가 그 테스트에 포함됐는지는 미확인 |
 | **LV-4** | 병렬 영속 프로필(빈 프로필 → 보안프로그램 재설치 오탐 해결) | `src/utils/chrome_cdp.py:307-336` | 구현 완료, 라이브 대기. docstring 은 설계 근거만 기술(검증 기록 아님) |
 | **LV-5** | 병렬 → WEHAGO 급여자료입력 E2E(공단EDI raw → SWSA 반영) | `src/workflows/wehago_swsa.py:207-227` | 마지막 관련 수정 `594ad22`(2026-07-05)는 버그픽스이지 E2E 확인이 아님. handoff §16.3 권장 |
