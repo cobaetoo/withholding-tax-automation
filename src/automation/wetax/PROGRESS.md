@@ -1,5 +1,50 @@
 # 위택스(Wetax) 자동화 진행 상황
 
+## ▶ 핸드오프 / 다음에 이어서 할 일 (2026-07-24 pause)
+
+> **세션 중단 이유:** 서식검증 **오류 없는** 전자신고 파일(`.1`/`.2`)을 찾는 중.  
+> 파일 준비되면 아래 순서대로 재개.
+
+### 재개 전제
+1. Phase 11 결과물: `바탕화면/지방소득세전자신고_{YYYYMM}/{수임처}/` 아래 **`.1` 또는 `.2`**
+2. GUI 대상 연·월 = 폴더 `YYYYMM` 일치
+3. 파일 비밀번호 · 휴대전화 (GUI 툴바)
+4. CDP 9223 Chrome + 위택스 **전자세금용** 공인인증서 로그인
+5. 변환 후 M32에서 **정상 신고 내역 ≥1, 오류 0** 인 파일로 제출 개발 (이전 오버루트 샘플은 납기일자 오류 있었음)
+
+### 재개 순서 (권장)
+| 순 | 작업 | 메모 |
+|----|------|------|
+| 1 | **오류 0건 파일** 1개 확보 후 변환 라이브 확인 | M32 `정상 N / 오류 0` |
+| 2 | 제출 1건 **수동** 클릭 → 제출 후 URL·화면 기록 | 리프레시? 결과탭(M33?)? 접수번호? |
+| 3 | `click_submit_report` 구현 (`_form` 또는 `_submit.py`) | `#btn_next` + **제출** 라벨, `accept_native_dialogs` 복원 필수 |
+| 4 | `wetax_local_tax` 스텁 제거 / 플래그 | `_STUB_SUBMIT = False` 또는 설정 스위치 |
+| 5 | 성공 판정 + 제출 후 `ensure_upload_form`(M31) | 다수임처 루프 계약 |
+| 6 | **오류 N건 정책** (PO) | 스킵 실패 / 경고 후 다음 / 제출 시도 — 미결정 |
+| 7 | 수임처 2~3건 선택 실행 라이브 | 1건 실패 시 계속 vs 중단도 미결정 |
+| 8 | 문서·단위/라이브 테스트·commit | GUIDE / USER_GUIDE / PROGRESS |
+
+### 재개 시 열 파일
+- `src/workflows/wetax_local_tax.py` — `_STUB_SUBMIT`, `run_single` 제출 단계
+- `src/automation/wetax/_form.py` — 변환 패턴 참고해 제출 추가
+- `src/automation/wetax/_dialogs.py` — confirm 복원
+- `src/automation/wetax/_constants.py` — `LABEL_SUBMIT`, M32 경로
+- `src/automation/wetax/_navigation.py` — `ensure_upload_form`
+- 검증: `scripts/e2e_wetax_w10_live.py`, 단위 `tests/test_wetax_*.py`
+
+### 하지 말 것 (제출 안정화 전)
+- runner 전체 분할, 홈택스 대공통화, 체크포인트 전면 도입
+- 오류 파일로 제출 자동화 강행
+
+### 한 줄 재개 프롬프트 (복붙용)
+```
+위택스 Phase 13 이어서: PROGRESS.md 핸드오프 기준으로
+오류 0건 .2 파일 준비됨 → 제출하기(click_submit) 실구현부터.
+_STUB_SUBMIT 해제, ensure_upload_form 유지, confirm 복원 필수.
+```
+
+---
+
 ## 범위 (현재 스냅샷)
 
 **Phase 13 — 위택스 지방세 신고 (특별징수 · 회계파일신고)**  
@@ -122,7 +167,9 @@ for 각 수임처:
 CDP 9223 + 위택스 로그인 세션 필요(W10). 로그아웃 시 스크립트가 main.do 로그인 대기.
 
 ## 변경 이력
+- 2026-07-24: 핸드오프 섹션 추가 — 오류 없는 파일 대기 중, 재개 시 제출 실구현부터.
 - 2026-07-24: W10 `ensure_upload_form` 라이브 E2E PASS (M31 no-op / M32→M31). 스크립트 `scripts/e2e_wetax_w10_live.py`.
+
 - 2026-07-24: 안전 리팩터 — confirm/alert 임시 수락 후 복원(`_dialogs.accept_native_dialogs`),
   `#btn_next` 변환/제출 이중 의미 가드(LABEL_CONVERT/SUBMIT), efile 확장자 `.1`/`.2` 만 허용,
   휴대전화 마스킹, 변환 결과 메타(`get_convert_result_summary`)·`ensure_upload_form`(스텁 후 M31 복귀).
