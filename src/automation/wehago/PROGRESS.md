@@ -19,6 +19,8 @@ withholding-tax-automation/
 │           ├── run_swsa0101.py      # 급여자료입력 (엑셀 다운로드→변환→업로드→PDF)
 │           ├── run_swta0101.py      # 원천징수이행상황신고서 (조회→마감/마감해제)
 │           ├── run_swer0101.py      # 원천징수전자신고 (제작→비밀번호→NTS 저장)
+│           ├── run_jitax_payment.py # 지방소득세특별징수납부서 SWTA0112 (기간→조회→마감)
+│           ├── run_jitax_efile.py   # 지방소득세특별징수전자신고 SWER0109 (제작→비밀번호→NTS 저장)
 │           └── wehago_auto_cdp.py   # [레거시] 모놀리식 통합 스크립트
 ```
 
@@ -201,6 +203,56 @@ python src/automation/wehago/run_swer0101.py
 
 ---
 
+### SWTA0112 (지방소득세특별징수납부서)
+
+원천징수이행상황신고서(SWTA0101)의 **지방세 짝**. 위하고 SmartA 안에서 메뉴만 바꿔
+진입하며 동작은 SWTA0101과 동일하게 **'마감'만** 수행한다 (기간설정→조회→마감; 이미
+마감이면 마감해제→재조회→재마감). 매월/반기 모두 지원(반기는 6·12월에만 실행, 원천세 동일).
+비밀번호 불필요. 라이브 검증: [테스트]리틀치프코리아(매월)·끽비어컴퍼니(반기), 2026-07-21.
+구현: `run_jitax_payment.py` / 함수 `run_jitax_payment()`.
+
+#### [JITAX_PAY-1] SWTA0112 페이지 이동
+- `click_menu(page, "SWSA0101")`로 SPA 라우팅 초기화 후 `goto_menu_page(page, "SWTA0112")` 코드-스왑
+- 메뉴 코드: `SWTA0112` (SWTA 계열, 원천이행상황 SWTA0101과 다른 페이지)
+
+#### [JITAX_PAY-2] 신고구분(매월/반기) 판단 — ★라디오 없음
+- **이 화면에는 매월/반기 라디오 버튼이 없다** (SWTA0101과 다른 점)
+- `_read_jitax_cycle(page)`: `#SearchMain .item` 안 `'신고 : 매월/반기'` 라벨 텍스트를
+  ground truth로 읽음. DB `report_cycle` 우선, 비어있으면 라벨 판별
+- 매월/반기 확정 실패 시 `RuntimeError`로 loud 중단 (조용히 잘못 마감 차단)
+
+#### [JITAX_PAY-3] 기간 설정 — ★위젯이 SWTA0101과 다름
+- `_set_jitax_period(page, year, start_month, end_month)`: 3회 재시도 + 전체 값 검증
+- **귀속년월 = 단일 월 드롭다운**(연도는 사업연도 고정 텍스트), 값 = 종료월
+  (매월=대상월, 반기=반기 종료월)
+- **지급년월 = 연·월 범위**(`div[tabindex=0]` × 4 = 시작년/월, 종료년/월)
+  - 매월 `start==end`, 반기 상반기 `01~06` / 하반기 `07~12`
+- **★순서 불변식(라이브 함정)**: **귀속년월을 건드리면 지급년월 '월'이 blank로 초기화된다.**
+  따라서 반드시 **귀속을 먼저, 지급을 마지막에** 설정한다 (순서 뒤바뀌면 지급 월 유실)
+- **★월 드롭다운 닫기 강제 금지(라이브 함정)**: `display:none`(공유 컨테이너 숨김)도,
+  `Escape`(월 선택 취소/되돌림)도 지급년월 월 선택을 깨뜨렸다. **`li` 클릭 자체가 값 커밋 +
+  드롭다운 닫기를 수행**하므로 settle sleep만 둔다 (SWER0101/SWTA0101의 명시적 닫기와 반대)
+- **★월 li 한정 매칭(라이브 함정)**: 화면에 이미 표시된 다른 'MM' div(귀속년월 등)와
+  충돌하므로, naive textContent 매칭 대신 열린 목록의 `li`로만 한정해 클릭
+
+#### [JITAX_PAY-4] 조회 — ★버튼 클래스가 다름
+- `_click_jitax_search(page)`: 조회 버튼은 **회색 `button.LUX_basic_btn`** (SWTA0101의
+  `WSC_LUXButton`이 아님). 텍스트 `'조회'` + 화면 최우측(x+width 최대) 우선 클릭 후 `dismiss_dialogs`
+
+#### [JITAX_PAY-5] 마감/마감해제 처리 — ★확인 모달 버튼이 다름
+- 마감 상태 판별·대기는 `run_swta0101`의 `_wait_close_button` / `_read_close_button` 재사용
+  (WSC_LUXButton `'마감'`/`'마감해제'`)
+- **"마감"** → `_apply_jitax_close()`: 마감 버튼 클릭 → **'마감 리스트' 확인 모달의 `'마감(F3)'`**
+  클릭(원천세는 `'확인'`) → 후속 안내 모달(`확인(enter)`/`확인`/`마감(F3)`) → 버튼이 `마감해제`로
+  전환됐는지 검증, 아니면 `RuntimeError`
+- **"마감해제"** → 마감해제 → 재조회 → 재마감 (SWTA0101 동일 정책: 최신 자료로 재마감).
+  마감해제 확인 모달 버튼 텍스트는 유동(`마감해제(F3)`/`확인` 등)이라 폴링 클릭
+- 반환값: 사용된 신고구분 문자열(`"매월"`/`"반기"`) → 어댑터가 DB `report_cycle` 역충전
+  (계약은 `run_swta0101`과 동일)
+
+
+---
+
 ## 주요 함수 레퍼런스
 
 | 함수 | 용도 |
@@ -276,6 +328,13 @@ python src/automation/wehago/run_swer0101.py
 | COM CoInitialize 누락 | thread executor에서 COM 사용 시 OSError | `select_nts_folder()` 진입 시 `comtypes.CoInitialize()` 호출 |
 | SWTA0101 마감 모달 미감지 | 마감 클릭 후 유의사항 모달이 "마감" 텍스트 없음 + 버튼이 `확인(enter)` | `_isDialog`에서 `확인(enter)` / `확인` 모두 매치 + 후속 "마감 완료!" 모달까지 2단계 처리 |
 | 엑셀 업로드 file_chooser 타임아웃 | `#collect` 토글 상태 모호 + 모달 방해 + JS evaluate 비사용자제스처 | 드롭다운 상태 검증 + 3단계 fallback (mouse.click → JS evaluate → hidden file input) |
+| SWTA0112 지급년월 '월' 유실 | 귀속년월을 변경하면 지급년월 월이 blank로 초기화됨 | 순서 불변식: 귀속을 먼저, 지급을 마지막에 설정 (`_set_jitax_period`) |
+| SWTA0112 월 드롭다운 선택 깨짐 | 선택 후 `display:none`/`Escape`로 닫으면 지급년월 월 선택이 취소·초기화됨 | 강제 닫기 금지 — `li` 클릭 자체가 값 커밋+닫기 수행, settle sleep만 |
+| SWTA0112 월 li 오클릭 | 화면에 표시된 다른 'MM' div(귀속년월 등)를 naive textContent 매칭이 잘못 클릭 | 열린 목록의 `li`로만 한정해 매칭·클릭 (`_select_month`) |
+| SWTA0112 매월/반기 미판별 | 이 화면엔 매월/반기 라디오가 없음(SWTA0101과 다름) | `'신고 : 매월/반기'` 라벨을 ground truth로 읽음 (`_read_jitax_cycle`) |
+| SWTA0112 조회 버튼 미발견 | 조회가 `WSC_LUXButton`이 아닌 회색 `LUX_basic_btn` | 텍스트 `'조회'`+최우측 `LUX_basic_btn` 클릭 (`_click_jitax_search`) |
+| SWTA0112 마감 확인 모달 미클릭 | 확인 버튼이 원천세 `'확인'`이 아닌 `'마감(F3)'` | `_click_modal_button`에 `'마감(F3)'` 텍스트 리스트 전달 |
+| SWER0109 전자신고 데이터 없음 | SWTA0112 납부서 마감 전에 실행 → 수임처 조회 시 '조회할 데이터 없음' | 순서 의존: 납부서(10번) 마감 후 전자신고(11번) 실행 |
 
 ---
 
@@ -356,6 +415,45 @@ python src/automation/wehago/run_swer0101.py
   | `2` | Button | 확인 (안내 모달) |
 
 - **저장 결과**: `Desktop/원천징수전자신고/YYYYMMDDCXXXXXX.01`
+
+---
+
+### SWER0109 (지방소득세특별징수전자신고)
+
+원천징수전자신고(SWER0101)의 **지방세 짝**. 흐름은 SWER0101을 그대로 미러링한다:
+지급기간 → 수임처 선택 → 제작(F4) → 변환파일 비밀번호 → 전자신고 파일 제작 → WehagoNTS 저장.
+전자신고 비밀번호 필요(상단 툴바 비밀번호 입력란). 라이브 검증: [테스트]리틀치프코리아,
+2026-07-21. 구현: `run_jitax_efile.py` / 함수 `run_jitax_efile()`.
+
+**★중요 전제조건**: 반드시 **지방소득세특별징수납부서(SWTA0112)를 먼저 마감**해야 전자신고
+데이터가 생성된다. 마감 안 하면 수임처 조회 시 '조회할 데이터 없음' → 파일 미생성. 원천세의
+'원천이행상황 마감(SWTA0101) → 원천전자신고 제작(SWER0101)'과 동일한 순서 의존성.
+
+#### [JITAX_EFILE-1] SWER0109 이동
+- `click_menu(page, "SWSA0101")`로 SPA 라우팅 초기화 후 `goto_menu_page(page, "SWER0109")` 코드-스왑
+- 메뉴 코드: `SWER0109` (SWER 계열)
+- 제출자등록 안내 모달·z-index overlay 자동 닫기 (SWER0101 동일)
+
+#### [JITAX_EFILE-2] 지급기간 설정
+- 지급기간은 **표준 구조**(`div[tabindex=0]` × 4 + sprite × 2)라 `set_period_fields()` 그대로 동작
+  (SWTA0112의 비표준 위젯과 달리 SWER0101과 동일)
+
+#### [JITAX_EFILE-3] 수임처 아이콘 → 코드도움 확인
+- `#SearchMain .item`에서 '수임처' 항목의 빈 텍스트 `button.WSC_LUXButton` 클릭 →
+  `click_codehelp_confirm()` (SWER0101 동일)
+
+#### [JITAX_EFILE-4] 제작(F4)
+- `button.WSC_LUXButton` '제작(F4)' Playwright 클릭 → 실패 시 `dismiss_dialogs` 후 JS 클릭 폴백
+  (`_isDialog` 오버레이가 pointer-events로 클릭 인터셉트하는 사례 우회)
+
+#### [JITAX_EFILE-5] 모달 분기 + 비밀번호 입력
+- `_isDialog`에서 `'변환파일 비밀번호'`(pwd) vs `'참고사항'`(ref) 분기 — 참고사항만 닫음 (SWER0101 동일)
+- 비밀번호 입력 + '전자신고 파일 제작(Enter)'은 **`run_swer0101.set_password_and_submit` 재사용**
+  - 비밀번호 규칙만 다름: **영문 소문자 + 숫자**
+
+#### [JITAX_EFILE-6] WehagoNTS 폴더 선택 + 저장
+- `select_nts_folder()` 재사용 (기본 폴더명 `지방소득세전자신고`, `save_dir` 우선)
+- 저장처(WehagoNTS)는 SWER0101과 동일 가정
 
 ---
 
@@ -496,6 +594,32 @@ python src/automation/wehago/run_swer0101.py
 - 1차 wait_for_selector: 10초 → 15초
 - 2차 (재시도): 8초 → 20초
 - `_run_phase1_directly()` 제거, `_handle_refresh_clients()`로 통합
+
+---
+
+## 2026-07 업데이트 내역
+
+### 지방소득세 특별징수 2종 신규 추가 (SWTA0112 / SWER0109)
+- 원천세(원천징수) 2종의 **지방세 짝**. 위하고 SmartA 안에서 다른 메뉴로 진입해 동일 방식 처리
+- **SWTA0112 (지방소득세특별징수납부서)** — `run_jitax_payment.py`
+  - 동작 = '마감'(기간설정→조회→마감; 이미 마감이면 마감해제→재조회→재마감), 매월/반기, 비밀번호 불필요
+  - SWTA0101 헬퍼(`_wait_close_button`/`_read_close_button`/`compute_half_period`/`half_period_target`) 재사용
+- **SWER0109 (지방소득세특별징수전자신고)** — `run_jitax_efile.py`
+  - 동작 = SWER0101 미러(지급기간→수임처→제작(F4)→변환파일 비밀번호→WehagoNTS 저장), 전자신고 비밀번호 필요
+  - `set_period_fields`, `click_codehelp_confirm`, `set_password_and_submit`, `select_nts_folder` 재사용
+  - **★전제조건**: SWTA0112 납부서를 먼저 마감해야 전자신고 데이터가 생성됨
+- 라이브 검증: [테스트]리틀치프코리아(매월)·끽비어컴퍼니(반기), 2026-07-21. pytest 178 통과
+
+### 사이드바 '위하고' 카테고리 최종 순서
+- 6 급여자료입력 / 7 급여명세 PDF / 8 원천이행상황신고서 / 9 원천전자신고 /
+  10 지방소득세특별징수납부서(신규) / 11 지방소득세특별징수전자신고(신규)
+- '홈택스' 카테고리: 12 홈택스 원천세 신고 ← 기존 phase_id 10에서 12로 재번호됨
+
+### 라이브에서 발견한 함정 (SWTA0112)
+- **귀속년월 변경 시 지급년월 '월'이 초기화** → 귀속을 먼저, 지급을 마지막에 설정
+- **월 드롭다운 닫기에 `display:none`/`Escape` 금지** → 월 선택이 취소·초기화됨. `li` 클릭만으로 값 커밋+닫기
+- **매월/반기 라디오 없음** → `'신고 : 매월/반기'` 라벨을 ground truth로 판단
+- **조회 버튼은 회색 `LUX_basic_btn`** (`WSC_LUXButton` 아님), 마감 확인 모달 버튼은 `'마감(F3)'` (`'확인'` 아님)
 
 ---
 

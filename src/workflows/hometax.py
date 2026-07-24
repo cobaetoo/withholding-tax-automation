@@ -1,4 +1,8 @@
-"""Phase 8: 홈택스 원천세 신고 어댑터"""
+"""Phase 12: 홈택스 원천세 신고 어댑터
+
+(위하고 지방소득세 메뉴 2종 추가로 phase_id 10 → 12 재번호. portal='hometax' 로만
+ 라우팅되므로 정수 id 는 사이드바 정렬·표시에만 사용됨.)
+"""
 
 import os
 import glob
@@ -10,7 +14,7 @@ from src.batch.state import StateManager
 
 
 @register(
-    phase_id=10,
+    phase_id=12,
     portal="hometax",
     display_name="홈택스 원천세 신고",
     enabled=True,  # GUI 사이드바에서 실행 가능(활성). 워크플로우 자체 동작은 변경 없음.

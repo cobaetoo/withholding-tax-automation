@@ -609,7 +609,7 @@ YAML 설정 → BatchEngine → [Job 1, Job 2, ..., Job N] → Reporter
 |------|-------------|-------------|------|
 | NHIS EDI | 완료 (10단계 워크플로우) | ~70% | BatchAdapter 구현 필요 |
 | NPS EDI | 완료 (13단계 워크플로우) | ~65% | 사업장전환 로직 재사용 |
-| WEHAGO | 부분 (SWSA0101, SWER0101) | ~15% | 다중 서식 미지원 |
+| WEHAGO | 부분 (SWSA0101, SWER0101, SWTA0112, SWER0109) | ~15% | 다중 서식 미지원. SWTA0112·SWER0109=지방소득세 특별징수(납부서·전자신고). 납부서(SWTA0112) 마감 → 전자신고(SWER0109) 제작 순서 의존 |
 | Hometax | 초기 (SWTA0101) | ~10% | 기본 구조만 |
 
 ### BatchAdapter 인터페이스 (설계)

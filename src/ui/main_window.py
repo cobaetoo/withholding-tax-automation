@@ -260,7 +260,9 @@ class MainWindow(QMainWindow):
         import src.workflows.wehago_salary_pdf    # noqa: F401
         import src.workflows.wehago_swta          # noqa: F401
         import src.workflows.wehago_swer          # noqa: F401
-        import src.workflows.hometax              # noqa: F401
+        import src.workflows.wehago_jitax_payment # noqa: F401  # NEW (10) 지방소득세특별징수납부서
+        import src.workflows.wehago_jitax_efile   # noqa: F401  # NEW (11) 지방소득세특별징수전자신고
+        import src.workflows.hometax              # noqa: F401  # (12) 홈택스
 
         from src.workflows.registry import get_all_phases, register_parallel_phase
         # 사이드바 "공단 EDI 병렬 자동화" Phase 2 (메타데이터 전용, is_parallel=True)

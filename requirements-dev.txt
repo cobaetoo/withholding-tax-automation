@@ -1,2 +1,6 @@
 # 개발/테스트 전용 의존성 (배포 번들에 포함 안 함)
 pytest>=7.0
+
+# 소스 보호 빌드 — 핵심 4패키지를 .pyd 로 네이티브 컴파일(tools/compile_protected.py).
+# 빌드 PC 전제: Visual Studio 2022 Build Tools(VC 워크로드). 사용자 PC 에는 불필요.
+Cython>=3.0,<3.2
