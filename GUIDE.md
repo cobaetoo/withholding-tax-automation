@@ -274,6 +274,9 @@ WEHAGO Phase 11(지방소득세특별징수전자신고, SWER0109)에서 생성�
 - M31/M32 동일 `#btn_next` → `LABEL_CONVERT`/`LABEL_SUBMIT` 로 구분  
 - 변환 결과 메타(`ok`/`err` 건수) step_data 기록 — 오류 N건이어도 변환 단계는 성공  
 - 스텁 제출 후 `ensure_upload_form` 으로 다음 수임처 M31 계약 통일  
+- **라이브 검증 (2026-07-24):** `ensure_upload_form` M31 no-op / M32→M31 재진입 PASS  
+  (`scripts/e2e_wetax_w10_live.py`, CDP 9223)  
+
 
 **다수임처 루프**  
 `전화·비번 재입력 → 파일 업로드 → 파일변환 → (제출 스텁 + M31 복귀)` 반복.  

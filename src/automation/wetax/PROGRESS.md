@@ -68,7 +68,8 @@ for 각 수임처:
 - `src/automation/wetax/_dialogs.py` — confirm/alert 임시 수락·복원
 - `src/automation/wetax/_constants.py` — URL·필드 id·라벨
 - GUI: 사이드바 **▼ 위택스** > **위택스 지방세 신고**
-- 프로브(개발용): `_probe_wetax_login.py`, `_probe_wetax_dismiss_popups.py`, `_probe_wetax_menu.py`
+- 라이브 E2E: `scripts/e2e_wetax_w10_live.py`, `scripts/e2e_wetax_refactor.py`
+- 단위 테스트: `tests/test_wetax_dialogs.py`, `test_wetax_file_find.py`, kwargs/toolbar/login
 
 ## 기술 스택
 - Playwright + CDP (포트 9223)
@@ -110,7 +111,18 @@ for 각 수임처:
 - 에이전트 Job Object 종료 시 자식 Chrome이 같이 죽지 않도록  
   `launch_chrome` 에 **CREATE_BREAKAWAY_FROM_JOB** 등 분리 플래그 적용 (`src/utils/chrome_cdp.py`)
 
+## 라이브 검증 (E2E)
+
+| 항목 | 결과 | 비고 | 스크립트 |
+|------|------|------|----------|
+| W10-A `ensure_upload_form` (이미 M31) | ✅ 2026-07-24 | no-op 유지, `#filePw` 존재 | `scripts/e2e_wetax_w10_live.py` |
+| W10-B M32 → M31 재진입 | ✅ 2026-07-24 | direct URL + `filePw=1` | 동일 |
+| W3/W2/W6/W14/W4-lite | ✅ (로컬+FS) | confirm 복원·라벨 가드·`.2` 필터 등 | `scripts/e2e_wetax_refactor.py` |
+
+CDP 9223 + 위택스 로그인 세션 필요(W10). 로그아웃 시 스크립트가 main.do 로그인 대기.
+
 ## 변경 이력
+- 2026-07-24: W10 `ensure_upload_form` 라이브 E2E PASS (M31 no-op / M32→M31). 스크립트 `scripts/e2e_wetax_w10_live.py`.
 - 2026-07-24: 안전 리팩터 — confirm/alert 임시 수락 후 복원(`_dialogs.accept_native_dialogs`),
   `#btn_next` 변환/제출 이중 의미 가드(LABEL_CONVERT/SUBMIT), efile 확장자 `.1`/`.2` 만 허용,
   휴대전화 마스킹, 변환 결과 메타(`get_convert_result_summary`)·`ensure_upload_form`(스텁 후 M31 복귀).
