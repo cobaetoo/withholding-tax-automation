@@ -47,17 +47,20 @@ def test_real_eight_phases_registered_in_order():
         import src.workflows.wehago_jitax_payment # noqa: F401
         import src.workflows.wehago_jitax_efile   # noqa: F401
         import src.workflows.hometax              # noqa: F401
+        import src.workflows.wetax_local_tax      # noqa: F401
     except Exception as e:  # Playwright/pywinauto 등 의존성 미충족 시
         pytest.skip(f"워크플로우 모듈 import 불가(의존성): {e}")
 
     ids = [p["phase_id"] for p in get_all_phases()]
-    # 병렬 phase(2)는 테스트에서 등록 안 함(main_window 에서만).
-    # 11개 워크플로우 = phase_id 1,3..12. 체계:
+    # 워크플로우 어댑터 phase 만 검사 (병렬 phase 2 는 main_window 전용 메타데이터.
+    # 다른 테스트가 register_parallel_phase 를 호출해도 오염되지 않게 제외).
     #   1 수임처리스트 / 3 건강보험 / 4 국민연금 / 5 고용보험 /
     #   6 급여자료입력 / 7 급여명세PDF / 8 원천이행상황 / 9 원천전자신고 /
-    #   10 지방소득세특별징수납부서 / 11 지방소득세특별징수전자신고 / 12 홈택스
-    assert ids[:11] == [1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-    for pid in (1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
+    #   10 지방소득세특별징수납부서 / 11 지방소득세특별징수전자신고 /
+    #   12 홈택스 / 13 위택스 지방세 신고
+    workflow_ids = [i for i in ids if i != 2]
+    assert workflow_ids[:12] == [1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    for pid in (1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13):
         assert get_phase_info(pid) is not None
         assert get_workflow(pid) is not None
 
@@ -65,12 +68,17 @@ def test_real_eight_phases_registered_in_order():
     assert get_phase_info(1)["is_list_phase"] is True
     assert get_phase_info(3)["is_list_phase"] is False
     # 병렬 EDI 안정화 후 모든 phase 재활성화 — ui_locked=False
-    for pid in (1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
+    for pid in (1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13):
         assert get_phase_info(pid)["ui_locked"] is False, f"phase {pid} 활성 기대"
-    # 비밀번호 필요: 9(원천전자신고 SWER), 11(지방소득세특별징수전자신고), 12(홈택스)
+    # 비밀번호 필요: 9(원천전자신고 SWER), 11(지방소득세특별징수전자신고),
+    #                12(홈택스), 13(위택스 파일비밀번호)
     assert get_phase_info(9)["needs_password"] is True
     assert get_phase_info(11)["needs_password"] is True
     assert get_phase_info(12)["needs_password"] is True
+    assert get_phase_info(13)["needs_password"] is True
+    assert get_phase_info(13)["needs_phone"] is True
     # 비밀번호 불필요: 1~8 + 10(지방소득세특별징수납부서)
     for pid in (1, 3, 4, 5, 6, 7, 8, 10):
         assert get_phase_info(pid)["needs_password"] is False
+    assert get_phase_info(13)["portal"] == "wetax"
+    assert get_phase_info(13)["display_name"] == "위택스 지방세 신고"

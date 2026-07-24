@@ -37,6 +37,7 @@ PORTAL_URLS = {
     "nps_edi": "https://edi.nps.or.kr/",
     "comwel_edi": "https://total.comwel.or.kr/",
     "hometax": "https://www.hometax.go.kr/",
+    "wetax": "https://www.wetax.go.kr/main.do",
 }
 
 # 인증 세션 파일

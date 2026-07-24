@@ -748,6 +748,7 @@ class AutomationRunner(AsyncWorker):
             "nps_edi": "edi.nps",
             "comwel_edi": "total.comwel.or.kr",
             "hometax": "hometax.go.kr",
+            "wetax": "wetax.go.kr",
             "wehago": "wehago.com",
         }.get(portal, "")
 
@@ -834,6 +835,7 @@ class AutomationRunner(AsyncWorker):
             "nps_edi": "edi.nps",
             "comwel_edi": "total.comwel.or.kr",
             "hometax": "hometax.go.kr",
+            "wetax": "wetax.go.kr",
             "wehago": "wehago.com",
         }.get(portal, "")
 
@@ -922,6 +924,7 @@ class AutomationRunner(AsyncWorker):
             "nps_edi": self._wait_for_login_nps,
             "comwel_edi": self._wait_for_login_comwel,
             "hometax": self._wait_for_login_hometax,
+            "wetax": self._wait_for_login_wetax,
             "wehago": self._wait_for_login_wehago,
         }.get(portal)
         return await handler() if handler else True
@@ -1126,6 +1129,112 @@ class AutomationRunner(AsyncWorker):
                         if (el.offsetParent === null) continue;  // 보이는 것만
                         const txt = (el.value || el.innerText || el.title || '').trim();
                         if (txt === '로그아웃') return true;
+                    }
+                    return false;
+                }"""), timeout=5)
+                if ok:
+                    self._page = pg
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def _wait_for_login_wetax(self) -> bool:
+        """위택스 로그인 대기 (전자세금용 공인인증서, Human-in-the-loop).
+
+        1) 메인 이벤트 팝업 등 닫기 (dismiss_popups) — 로그인 UI 가림 방지
+        2) CDP 포트 생존 + 페이지 내 '로그아웃' 가시성으로 로그인 판정
+        판정 기준은 라이브 확인 후 세밀 조정 가능 (PROGRESS.md).
+        """
+        from src.utils.chrome_cdp import check_cdp_available
+        from src.automation.wetax._common import dismiss_popups
+
+        async def _wetax_dismiss(when: str) -> None:
+            """메인 이벤트 팝업 닫기. 로그인 전·후 모두 호출.
+
+            main.do → login.do → main.do 복귀 시 fnCreateWtxMainPopup 이
+            팝업을 다시 띄우므로, 로그인 직후에도 한 번 더 닫아야 한다.
+            """
+            try:
+                page = self._page
+                if page is None:
+                    for pg in list(self._context.pages):
+                        if "wetax.go.kr" in (pg.url or ""):
+                            page = pg
+                            self._page = pg
+                            break
+                if page is None:
+                    return
+                self.log_message.emit(f"[위택스] 메인 팝업 확인·닫기 ({when})...")
+                n = await dismiss_popups(
+                    page,
+                    logger=lambda m: self.log_message.emit(m),
+                )
+                if n:
+                    self.log_message.emit(f"[위택스] 팝업 닫기 완료 ({when}, {n})")
+            except Exception as e:
+                self.log_message.emit(f"[위택스] 팝업 닫기 스킵({when}): {e}")
+
+        # ── 로그인 대기 직전: 메인 팝업 닫기 (개수 가변) ──
+        await _wetax_dismiss("로그인 전")
+
+        self.log_message.emit(
+            "[위택스] 로그인 대기 중... 전자세금용 공인인증서로 로그인해 주세요."
+        )
+        for i in range(180):  # 최대 ~15분
+            if self._stop_event.is_set():
+                return False
+            await asyncio.sleep(5)
+
+            cdp_ok = await asyncio.to_thread(check_cdp_available)
+            if not cdp_ok:
+                raise _BrowserClosedError()
+
+            try:
+                if await self._wetax_logged_in():
+                    self.log_message.emit("위택스 로그인 확인됨")
+                    # 로그인 후 main.do 재진입 시 팝업이 다시 뜸 → 한 번 더 닫기
+                    await asyncio.sleep(0.8)  # 팝업 렌더 여유
+                    await _wetax_dismiss("로그인 후")
+                    return True
+            except Exception:
+                pass
+            if i % 12 == 11:
+                self.log_message.emit(f"  로그인 대기 중... ({(i + 1) * 5}초)")
+        self.log_message.emit("위택스 로그인 대기 시간 초과")
+        return False
+
+    async def _wetax_logged_in(self) -> bool:
+        """위택스 로그인 여부 판정.
+
+        라이브 확인(2026-07):
+        - main: a.btnLogout + 로그인연장 타이머
+        - 회계파일신고 등 하위 화면: btnLogout 이 DOM/가시성에서 빠질 수 있음
+          → **로그인연장** 버튼/텍스트도 로그인 시그널로 인정
+        """
+        for pg in list(self._context.pages):
+            try:
+                if "wetax.go.kr" not in pg.url:
+                    continue
+                ok = await asyncio.wait_for(pg.evaluate("""() => {
+                    const vis = (el) => {
+                        if (!el) return false;
+                        const s = getComputedStyle(el);
+                        if (s.display === 'none' || s.visibility === 'hidden') return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0;
+                    };
+                    // 1) 헤더 로그아웃
+                    const btn = document.querySelector('a.btnLogout');
+                    if (vis(btn)) return true;
+                    // 2) 로그인연장 타이머/버튼 (하위 메뉴에서도 유지 — 라이브 B070101M31)
+                    const all = document.querySelectorAll('a, button, span, div, li');
+                    for (const el of all) {
+                        if (!vis(el)) continue;
+                        const txt = (el.value || el.innerText || el.title || '')
+                            .replace(/\\s+/g, ' ').trim();
+                        if (txt === '로그아웃') return true;
+                        if (txt === '로그인연장' || txt.includes('로그인연장')) return true;
                     }
                     return false;
                 }"""), timeout=5)

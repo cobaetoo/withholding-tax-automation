@@ -219,7 +219,8 @@ class MainWindow(QMainWindow):
         self.name_input.setVisible(False)
         layout.addWidget(self.name_input)
 
-        # 전자신고 비밀번호 (Phase 7 선택 시만 표시)
+        # 전자신고/파일 비밀번호 (needs_password — 홈택스·위택스 공통 스타일)
+        # EchoMode.Password, placeholder 8~15자리, 미입력 시 실행 차단
         self.pw_label = QLabel("비밀번호")
         self.pw_label.setVisible(False)
         layout.addWidget(self.pw_label)
@@ -229,6 +230,10 @@ class MainWindow(QMainWindow):
         self.pw_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.pw_input.setFixedWidth(150)
         self.pw_input.setVisible(False)
+        self.pw_input.setToolTip(
+            "전자신고 파일 비밀번호\n"
+            "(홈택스 원천세 / 위택스 지방세 회계파일신고 공통)"
+        )
         # 입력 시 빨간 에러 강조 자동 해제
         self.pw_input.textChanged.connect(self._on_pw_input_changed)
         layout.addWidget(self.pw_input)
@@ -238,6 +243,23 @@ class MainWindow(QMainWindow):
         self.pw_error_label.setStyleSheet("color: #f44336; font-size: 12px;")
         self.pw_error_label.setVisible(False)
         layout.addWidget(self.pw_error_label)
+
+        # 위택스 휴대전화번호 (needs_phone phase — 회계파일신고 dclrRlpMblTelno)
+        self.phone_label = QLabel("휴대전화")
+        self.phone_label.setVisible(False)
+        layout.addWidget(self.phone_label)
+
+        self.phone_input = QLineEdit()
+        self.phone_input.setPlaceholderText("010-1234-5678")
+        self.phone_input.setFixedWidth(130)
+        self.phone_input.setVisible(False)
+        self.phone_input.textChanged.connect(self._on_phone_input_changed)
+        layout.addWidget(self.phone_input)
+
+        self.phone_error_label = QLabel("")
+        self.phone_error_label.setStyleSheet("color: #f44336; font-size: 12px;")
+        self.phone_error_label.setVisible(False)
+        layout.addWidget(self.phone_error_label)
 
         layout.addStretch()
 
@@ -263,6 +285,7 @@ class MainWindow(QMainWindow):
         import src.workflows.wehago_jitax_payment # noqa: F401  # NEW (10) 지방소득세특별징수납부서
         import src.workflows.wehago_jitax_efile   # noqa: F401  # NEW (11) 지방소득세특별징수전자신고
         import src.workflows.hometax              # noqa: F401  # (12) 홈택스
+        import src.workflows.wetax_local_tax      # noqa: F401  # (13) 위택스 지방세 신고
 
         from src.workflows.registry import get_all_phases, register_parallel_phase
         # 사이드바 "공단 EDI 병렬 자동화" Phase 2 (메타데이터 전용, is_parallel=True)
@@ -350,16 +373,48 @@ class MainWindow(QMainWindow):
         if show_name:
             self.name_input.setFocus()
 
-        # Phase 7 선택 시 비밀번호 필드 표시
+        # 비밀번호 필드 (needs_password — 홈택스·위택스 공통 스타일)
         show_pw = self._needs_password(phase_id)
         self.pw_label.setVisible(show_pw)
         self.pw_input.setVisible(show_pw)
         if show_pw:
+            # 위택스: 파일비밀번호임을 라벨로 조금 더 명시 (입력 위젯 스타일은 홈택스와 동일)
+            if self._get_portal_for_phase(phase_id) == "wetax":
+                self.pw_label.setText("비밀번호")
+                self.pw_input.setPlaceholderText("8~15자리")
+                self.pw_input.setToolTip(
+                    "위택스 회계파일신고 — 전자신고 파일 비밀번호\n"
+                    "(WEHAGO 지방소득세 특별징수 전자신고 제작 시 설정한 값)"
+                )
+            else:
+                self.pw_label.setText("비밀번호")
+                self.pw_input.setPlaceholderText("8~15자리")
+                self.pw_input.setToolTip(
+                    "전자신고 파일 비밀번호\n"
+                    "(홈택스 원천세 / 위하고 전자신고 공통)"
+                )
             self.pw_input.setFocus()
         else:
             self.pw_input.clear()
         # phase 전환 시 비밀번호 에러 강조 해제
         self.pw_error_label.setVisible(False)
+
+        # 휴대전화 필드 (needs_phone — 위택스 회계파일신고)
+        show_phone = self._needs_phone(phase_id)
+        self.phone_label.setVisible(show_phone)
+        self.phone_input.setVisible(show_phone)
+        if show_phone:
+            self.phone_label.setText("휴대전화")
+            self.phone_input.setPlaceholderText("010-1234-5678")
+            self.phone_input.setToolTip(
+                "위택스 회계파일신고 휴대전화번호\n"
+                "(화면 #dclrRlpMblTelno 에 입력됩니다)"
+            )
+            if not show_pw:
+                self.phone_input.setFocus()
+        else:
+            self.phone_input.clear()
+        self.phone_error_label.setVisible(False)
 
     def _get_portal_for_phase(self, phase_id: int) -> str | None:
         """페이즈 ID에 해당하는 포털 반환"""
@@ -383,6 +438,10 @@ class MainWindow(QMainWindow):
         """UI 비밀번호 필드가 필요한 phase(Phase 7, 8) 여부."""
         return bool(self._phase_info(phase_id).get("needs_password"))
 
+    def _needs_phone(self, phase_id: int) -> bool:
+        """UI 휴대전화 필드가 필요한 phase(위택스 회계파일신고 등)."""
+        return bool(self._phase_info(phase_id).get("needs_phone"))
+
     def _require_password(self) -> str | None:
         """needs_password phase 의 비밀번호 반환. 미입력 시 강력 알림 후 None.
 
@@ -397,24 +456,54 @@ class MainWindow(QMainWindow):
         self._warn_password_required()
         return None
 
+    def _require_phone(self) -> str | None:
+        """needs_phone phase 의 휴대전화 반환. 미입력 시 알림 후 None.
+
+        불필요 phase -> ''. 필요 phase 에서 값이 있으면 반환, 없으면 None.
+        """
+        if not self._needs_phone(self._selected_phase):
+            return ""
+        phone = self.phone_input.text().strip()
+        if phone:
+            return phone
+        self._warn_phone_required()
+        return None
+
     def _warn_password_required(self):
         """비밀번호 미입력 강력 알림 — 모달 popup + 빨간 글씨 + 입력창 포커스.
 
         statusBar 메시지는 놓치기 쉬워(화면 최하단 작은 글씨) 실행 실패의 원인이
         되므로, 모달 popup(QMessageBox.warning)과 필드 옆 빨간 글씨로 강제 알림.
         """
-        self.pw_error_label.setText("전자신고 비밀번호를 입력하세요 (8~15자리)")
+        self.pw_error_label.setText("전자신고 파일 비밀번호를 입력하세요 (8~15자리)")
         self.pw_error_label.setVisible(True)
         QMessageBox.warning(
             self, "비밀번호 필요",
-            "전자신고 비밀번호를 입력하세요.\n비밀번호 없이 실행할 수 없습니다.",
+            "전자신고 파일 비밀번호를 입력하세요.\n"
+            "(홈택스 원천세·위택스 회계파일신고 공통)\n"
+            "비밀번호 없이 실행할 수 없습니다.",
         )
         self.pw_input.setFocus()
+
+    def _warn_phone_required(self):
+        """휴대전화 미입력 알림."""
+        self.phone_error_label.setText("휴대전화번호를 입력하세요")
+        self.phone_error_label.setVisible(True)
+        QMessageBox.warning(
+            self, "휴대전화 필요",
+            "위택스 신고에 사용할 휴대전화번호를 입력하세요.\n"
+            "예: 010-1234-5678",
+        )
+        self.phone_input.setFocus()
 
     def _on_pw_input_changed(self, text: str):
         """비밀번호 입력 시 빨간 에러 강조 해제"""
         if text.strip():
             self.pw_error_label.setVisible(False)
+
+    def _on_phone_input_changed(self, text: str):
+        if text.strip():
+            self.phone_error_label.setVisible(False)
 
     def _load_client_list(self, portal_override: str | None = None):
         """DB에서 수임처 목록을 조회하여 테이블에 표시
@@ -595,6 +684,10 @@ class MainWindow(QMainWindow):
         password = self._require_password()
         if password is None:
             return
+        # 휴대전화 필요 phase (위택스): 툴바 휴대전화 필드
+        phone = self._require_phone()
+        if phone is None:
+            return
 
         self.company_table.set_run_active(True)
         self.pause_btn.setEnabled(True)
@@ -606,6 +699,8 @@ class MainWindow(QMainWindow):
         )
         if password:
             start_kwargs["password"] = password
+        if phone:
+            start_kwargs["phone"] = phone
 
         self.runner.start_phase(self._selected_phase, **start_kwargs)
         self._poll_timer.start()
@@ -784,6 +879,13 @@ class MainWindow(QMainWindow):
             return
         if pw:
             extra_kwargs["password"] = pw
+        phone = self._require_phone()
+        if phone is None:
+            self.company_table.set_run_active(False)
+            self.company_table.set_buttons_enabled(True)
+            return
+        if phone:
+            extra_kwargs["phone"] = phone
 
         self.runner.start_selected_clients(
             self._selected_phase, client_infos,

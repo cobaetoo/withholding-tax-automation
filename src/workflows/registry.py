@@ -8,11 +8,12 @@ _PHASE_REGISTRY: dict[int, dict] = {}
 
 
 def register(phase_id: int, portal: str, display_name: str, *, enabled: bool = True,
-             needs_password: bool = False, is_list_phase: bool = False,
+             needs_password: bool = False, needs_phone: bool = False,
+             is_list_phase: bool = False,
              ui_locked: bool = False, is_parallel: bool = False):
     """워크플로우 클래스를 레지스트리에 등록하는 데코레이터.
 
-    capability 메타데이터(needs_password/is_list_phase/ui_locked/is_parallel)는
+    capability 메타데이터(needs_password/needs_phone/is_list_phase/ui_locked/is_parallel)는
     UI 분기(main_window/automation_runner)에서 매직넘버(phase_id==1/7/8/...)를
     대체하는 데 사용. 동작 자체는 변경하지 않는다.
     """
@@ -21,6 +22,7 @@ def register(phase_id: int, portal: str, display_name: str, *, enabled: bool = T
         cls.portal = portal
         cls.display_name = display_name
         cls.needs_password = needs_password
+        cls.needs_phone = needs_phone
         cls.is_list_phase = is_list_phase
         cls.ui_locked = ui_locked
         cls.is_parallel = is_parallel
@@ -30,6 +32,7 @@ def register(phase_id: int, portal: str, display_name: str, *, enabled: bool = T
             "display_name": display_name,
             "enabled": enabled,
             "needs_password": needs_password,
+            "needs_phone": needs_phone,
             "is_list_phase": is_list_phase,
             "ui_locked": ui_locked,
             "is_parallel": is_parallel,
@@ -51,6 +54,7 @@ def register_parallel_phase(phase_id: int, display_name: str, *, portal: str = "
         "display_name": display_name,
         "enabled": True,
         "needs_password": False,
+        "needs_phone": False,
         "is_list_phase": False,
         "ui_locked": False,
         "is_parallel": True,
@@ -81,6 +85,7 @@ def get_all_phases() -> list[dict]:
             "portal": info["portal"],
             "enabled": info["enabled"],
             "needs_password": info.get("needs_password", False),
+            "needs_phone": info.get("needs_phone", False),
             "is_list_phase": info.get("is_list_phase", False),
             "ui_locked": info.get("ui_locked", False),
             "is_parallel": info.get("is_parallel", False),

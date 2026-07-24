@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import sys
 import shutil
 import subprocess
 import json
@@ -10,6 +11,13 @@ import urllib.request
 import glob
 
 from src.config import APP_DATA_DIR
+
+# Windows: 에이전트/IDE 가 스크립트를 Job Object 로 감싸면, 스크립트 종료 시
+# 자식 Chrome 까지 같이 죽인다 → CDP 가 "갑자기 꺼진" 것처럼 보임.
+# CREATE_BREAKAWAY_FROM_JOB 으로 Chrome 을 Job 밖으로 분리한다.
+_WIN_CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+_WIN_CREATE_NEW_PROCESS_GROUP = 0x00000200
+_WIN_DETACHED_PROCESS = 0x00000008
 
 
 # WTAX_NO_DELAY 선례: env 미설정 → 9223(직렬, 현행). WTAX_CDP_PORT=9224 등으로 병렬 분리.
@@ -264,33 +272,64 @@ def _attempt_launch(chrome_path, junc, profile, url, *, port=CDP_PORT, kill_wait
     kill_chrome(port=port)
     time.sleep(kill_wait)  # 프로필 SingletonLock 해제 대기
 
-    proc = subprocess.Popen(
-        [
-            chrome_path,
-            f"--remote-debugging-port={port}",
-            f"--user-data-dir={junc}",
-            f"--profile-directory={profile}",
-            # 창 크기 고정 — --start-maximized 는 OS 수준 최대화라 모니터 해상도에
-            # 따라 실제 viewport 가 달라짐. 근로복지공단 반응형 헤더는 viewport 너비가
-            # 좁으면 GNB 메뉴를 숨기므로, 모든 PC/해상도에서 1920x1080 을 보장하려면
-            # Chrome 프로세스 수준에서 고정 (--window-size). set_viewport_size 와 이중 방어.
-            "--window-size=1920,1080",
-            # webdriver=true 원천 차단 — a2f9c11이 --test-type(탐지신호라 제거 맞음)과
-            # 함께 묶어 삭제한 플래그 복원. NHIS EDI 보안프로그램이 navigator.webdriver
-            # 를 감지해 페이지를 무한 리로드(로그인 루프)하는 것을 막는다. blink 레벨에서
-            # 꺼지므로 첫 페이지 로드부터 적용(stealth add_init_script 타이밍 갭 해소).
-            "--disable-blink-features=AutomationControlled",
-            # 병렬(창 2개)에서 뒤에 가려지는 창은 Chrome이 렌더·타이머를
-            # throttle 해 Nexacro 화면 구성이 지연된다(탭 전환·로그인 감지 실패
-            # 원인). 가려진/백그라운드 창도 전경처럼 풀스피드로 유지.
-            "--disable-backgrounding-occluded-windows",
-            "--disable-renderer-backgrounding",
-            "--disable-background-timer-throttling",
-            url,
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    chrome_args = [
+        chrome_path,
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={junc}",
+        f"--profile-directory={profile}",
+        # 창 크기 고정 — --start-maximized 는 OS 수준 최대화라 모니터 해상도에
+        # 따라 실제 viewport 가 달라짐. 근로복지공단 반응형 헤더는 viewport 너비가
+        # 좁으면 GNB 메뉴를 숨기므로, 모든 PC/해상도에서 1920x1080 을 보장하려면
+        # Chrome 프로세스 수준에서 고정 (--window-size). set_viewport_size 와 이중 방어.
+        "--window-size=1920,1080",
+        # webdriver=true 원천 차단 — a2f9c11이 --test-type(탐지신호라 제거 맞음)과
+        # 함께 묶어 삭제한 플래그 복원. NHIS EDI 보안프로그램이 navigator.webdriver
+        # 를 감지해 페이지를 무한 리로드(로그인 루프)하는 것을 막는다. blink 레벨에서
+        # 꺼지므로 첫 페이지 로드부터 적용(stealth add_init_script 타이밍 갭 해소).
+        "--disable-blink-features=AutomationControlled",
+        # 병렬(창 2개)에서 뒤에 가려지는 창은 Chrome이 렌더·타이머를
+        # throttle 해 Nexacro 화면 구성이 지연된다(탭 전환·로그인 감지 실패
+        # 원인). 가려진/백그라운드 창도 전경처럼 풀스피드로 유지.
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-background-timer-throttling",
+        url,
+    ]
+
+    popen_kwargs: dict = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    proc = None
+    if sys.platform == "win32":
+        # Job Object 밖 분리 시도 (에이전트 종료 시 Chrome 동반 종료 방지).
+        # DETACHED_PROCESS 는 일부 환경에서 WinError 5 → 제외.
+        flag_candidates = (
+            _WIN_CREATE_BREAKAWAY_FROM_JOB | _WIN_CREATE_NEW_PROCESS_GROUP,
+            _WIN_CREATE_NEW_PROCESS_GROUP,
+            0,
+        )
+        for flags in flag_candidates:
+            try:
+                kw = dict(popen_kwargs)
+                if flags:
+                    kw["creationflags"] = flags
+                proc = subprocess.Popen(chrome_args, **kw)
+                break
+            except OSError:
+                proc = None
+        if proc is None:
+            # 최후: cmd start 로 explorer 계열에서 기동 (Job 밖)
+            # start "" <exe> args...
+            start_cmd = ["cmd", "/c", "start", "", chrome_args[0], *chrome_args[1:]]
+            proc = subprocess.Popen(
+                start_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+    else:
+        proc = subprocess.Popen(chrome_args, **popen_kwargs)
+
     pid = proc.pid
     if port is not None:
         _launched_pids[port] = pid

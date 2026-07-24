@@ -21,6 +21,7 @@ class Portal(str, enum.Enum):
     NHIS_EDI = "nhis_edi"
     NPS_EDI = "nps_edi"
     HOMETAX = "hometax"
+    WETAX = "wetax"
 
     @property
     def display_name(self) -> str:
@@ -29,6 +30,7 @@ class Portal(str, enum.Enum):
             "nhis_edi": "국민건강보험 EDI",
             "nps_edi": "국민연금 EDI",
             "hometax": "홈택스",
+            "wetax": "위택스",
         }
         return names.get(self.value, self.value)
 

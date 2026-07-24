@@ -25,7 +25,7 @@ app = QApplication.instance() or QApplication([])
 
 
 def _phases():
-    """실제 12개 phase 를 모사한 합성 입력(무거운 워크플로우 import 회피)."""
+    """실제 13개 phase 를 모사한 합성 입력(무거운 워크플로우 import 회피)."""
     def p(pid, name, portal, is_list=False):
         return {"phase_id": pid, "display_name": name, "portal": portal,
                 "enabled": True, "is_list_phase": is_list}
@@ -42,6 +42,7 @@ def _phases():
         p(10, "지방소득세특별징수납부서", "wehago"),
         p(11, "지방소득세특별징수전자신고", "wehago"),
         p(12, "홈택스 원천세 신고", "hometax"),
+        p(13, "위택스 지방세 신고", "wetax"),
     ]
 
 
@@ -66,10 +67,11 @@ def test_pinned_is_only_list_phase():
 
 def test_category_order_and_membership():
     pinned_ids, groups, order = _grouped(_phases())
-    assert order == ["공단 EDI", "위하고", "홈택스"]
+    assert order == ["공단 EDI", "위하고", "홈택스", "위택스"]
     assert groups["공단 EDI"] == [2, 3, 4, 5]
     assert groups["위하고"] == [6, 7, 8, 9, 10, 11]
     assert groups["홈택스"] == [12]
+    assert groups["위택스"] == [13]
 
 
 def test_sorted_within_group_regardless_of_input_order():
@@ -77,9 +79,10 @@ def test_sorted_within_group_regardless_of_input_order():
     reversed_phases = list(reversed(_phases()))
     pinned_ids, groups, order = _grouped(reversed_phases)
     assert pinned_ids == [1]
-    assert order == ["공단 EDI", "위하고", "홈택스"]
+    assert order == ["공단 EDI", "위하고", "홈택스", "위택스"]
     assert groups["공단 EDI"] == [2, 3, 4, 5]
     assert groups["위하고"] == [6, 7, 8, 9, 10, 11]
+    assert groups["위택스"] == [13]
 
 
 def test_empty_category_omitted():
@@ -87,7 +90,7 @@ def test_empty_category_omitted():
     phases = [p for p in _phases() if p["portal"] != "hometax"]
     _, groups, order = _grouped(phases)
     assert "홈택스" not in groups
-    assert order == ["공단 EDI", "위하고"]
+    assert order == ["공단 EDI", "위하고", "위택스"]
 
 
 def test_unknown_portal_goes_to_trailing_fallback():
@@ -97,16 +100,16 @@ def test_unknown_portal_goes_to_trailing_fallback():
     _, groups, order = _grouped(phases)
     assert groups["기타"] == [99]
     assert order[-1] == "기타"                 # 알려진 카테고리 뒤
-    assert order[:3] == ["공단 EDI", "위하고", "홈택스"]
+    assert order[:4] == ["공단 EDI", "위하고", "홈택스", "위택스"]
 
 
 # ── 2) PhaseSidebar 위젯 테스트(offscreen) ──
 
 def test_all_phases_registered_in_buttons():
-    """위치(고정/카테고리)와 무관하게 10개 phase 전부 self._buttons 에 등록."""
+    """위치(고정/카테고리)와 무관하게 13개 phase 전부 self._buttons 에 등록."""
     sb = PhaseSidebar()
     sb.set_phases(_phases())
-    assert set(sb._buttons.keys()) == set(range(1, 13))
+    assert set(sb._buttons.keys()) == set(range(1, 14))
 
 
 def test_reentrant_set_phases_no_duplicate_widgets():
@@ -116,9 +119,9 @@ def test_reentrant_set_phases_no_duplicate_widgets():
     sb.set_phases(_phases())
     app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     app.processEvents()
-    assert len(sb.findChildren(PhaseButton)) == 12
-    assert len(sb.findChildren(CollapsibleSection)) == 3   # 공단EDI/위하고/홈택스
-    assert set(sb._buttons.keys()) == set(range(1, 13))
+    assert len(sb.findChildren(PhaseButton)) == 13
+    assert len(sb.findChildren(CollapsibleSection)) == 4   # 공단EDI/위하고/홈택스/위택스
+    assert set(sb._buttons.keys()) == set(range(1, 14))
 
 
 def test_pinned_button_not_inside_any_section():

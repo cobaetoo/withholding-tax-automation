@@ -1,4 +1,4 @@
-"""페이즈 사이드바 — 상단 고정 항목 + 3개 카테고리 아코디언(공단 EDI/위하고/홈택스)"""
+"""페이즈 사이드바 — 상단 고정 항목 + 카테고리 아코디언(공단 EDI/위하고/홈택스/위택스)"""
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QPushButton, QLabel, QScrollArea, QFrame,
@@ -9,7 +9,7 @@ from src.ui.styles import STATUS_COLORS
 
 
 # ── 카테고리 매핑 (표시 전용 — registry/실행 경로와 무관) ──
-CATEGORY_ORDER = ("공단 EDI", "위하고", "홈택스")
+CATEGORY_ORDER = ("공단 EDI", "위하고", "홈택스", "위택스")
 FALLBACK_CATEGORY = "기타"
 PORTAL_CATEGORY = {
     "parallel":   "공단 EDI",
@@ -18,6 +18,7 @@ PORTAL_CATEGORY = {
     "comwel_edi": "공단 EDI",
     "wehago":     "위하고",
     "hometax":    "홈택스",
+    "wetax":      "위택스",
 }
 
 
@@ -263,7 +264,7 @@ class PhaseSidebar(QWidget):
 
         phases: get_all_phases() 결과. 각 dict 는 phase_id/display_name/portal/
         enabled/is_list_phase 등을 포함. is_list_phase 는 상단 고정, 나머지는
-        portal 기준 3개 카테고리 아코디언으로 그룹핑한다.
+        portal 기준 카테고리 아코디언(공단 EDI/위하고/홈택스/위택스)으로 그룹핑한다.
         """
         content_layout = self._content.layout()
         self._clear_layout(content_layout)
