@@ -6,14 +6,29 @@ QMainWindow {
     color: #1a1a1a;
 }
 
+/* background 를 명시하지 않으면 Windows 다크모드에서 Fusion 이
+   검정 배경을 물려 글자(#1a1a1a)와 겹쳐 안 보이는 경우가 있음 */
 QWidget {
     font-family: '맑은 고딕', 'Segoe UI', sans-serif;
     font-size: 13px;
     color: #1a1a1a;
+    background-color: #ffffff;
 }
 
 QLabel {
     color: #1a1a1a;
+    background-color: transparent;
+}
+
+QScrollArea, QAbstractScrollArea, QFrame {
+    background-color: #ffffff;
+    color: #1a1a1a;
+}
+
+QAbstractItemView {
+    background-color: #ffffff;
+    color: #1a1a1a;
+    alternate-background-color: #fafafa;
 }
 
 QLineEdit {

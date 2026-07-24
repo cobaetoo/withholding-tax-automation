@@ -14,4 +14,5 @@ FIELD_PHONE = "dclrRlpTelno"           # 전화번호 (유선, 기입력될 수 
 FIELD_MOBILE = "dclrRlpMblTelno"       # 휴대전화번호 ★ 담당자 입력
 FIELD_FILE_INPUT = "file_upload_0_"    # 암호화 파일 <input type=file>
 FIELD_FILE_PW = "filePw"               # 파일비밀번호
-BTN_CONVERT = "btn_next"               # 파일변환하기 (하단)
+BTN_CONVERT = "btn_next"               # 파일변환하기 (하단, //*[@id="btn_next"])
+# 제출 후 페이지 리프레시 → 수임처마다 전화·비번 재입력 + 파일만 교체 (PROGRESS 다수임처 루프)

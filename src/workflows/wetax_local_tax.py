@@ -2,14 +2,20 @@
 
 WEHAGO Phase 11(지방소득세특별징수전자신고) 전자신고파일을 위택스에 업로드.
 
-워크플로우 (GUIDE.md / USER_GUIDE.md / src/automation/wetax/PROGRESS.md):
-  1. 전자세금용 공인인증서 로그인 (Human-in-the-loop, runner 담당)
-  2. 메뉴: 신고 → 특별징수 → 회계파일신고
-  3. 휴대전화번호 입력
-  4. 파일비밀번호 (GUI 툴바 — 홈택스 원천세와 동일 needs_password UI)
-  5. 암호화 파일선택 (전자신고파일)
-  6. [파일변환하기]
-  7. [제출하기]
+단건(run_single) 파이프라인:
+  1. 로그인 완료 가정 (runner _wait_for_login_wetax)
+  2. 회계파일신고 화면 (이미 있으면 no-op)
+  3. 휴대전화 (GUI phone → #dclrRlpMblTelno)
+  4. 파일비밀번호 (GUI password → #filePw)
+  5. 암호화 파일선택 (수임처별) — STUB (파일 준비 후 구현)
+  6. 파일변환하기 (#btn_next) — STUB
+  7. 제출하기 — STUB (실제 제출 시 페이지 리프레시 가정)
+
+다수임처(선택건/전체) 루프:
+  로그인 1회 후 수임처마다 run_single 호출.
+  실제 제출·리프레시 전에도 스텁이 True 를 반환하므로 다음 수임처로 진행.
+  파일 준비 후 5~7 만 실구현하면
+  「전화·비번 재입력 → 파일 교체 → 변환 → 제출 → 리프레시」 모델이 된다.
 
 portal='wetax'. phase_id 는 사이드바 정렬·표시용.
 """
@@ -19,12 +25,16 @@ from src.workflows.base import BaseWorkflow
 from src.batch.state import StateManager
 
 
+# 파일 업로드·변환·제출 실구현 전까지 True.
+# 선택건/전체 다수임처 루프가 전화·비번까지 돌고 다음 수임처로 넘어가도록 함.
+_STUB_FILE_PIPELINE = True
+
+
 @register(
     phase_id=13,
     portal="wetax",
     display_name="위택스 지방세 신고",
     enabled=True,
-    # 파일비밀번호 + 휴대전화 — GUI 툴바 (홈택스와 동일 비밀번호 필드 스타일)
     needs_password=True,
     needs_phone=True,
 )
@@ -33,7 +43,7 @@ class WetaxLocalTaxWorkflow(BaseWorkflow):
         {"name": "connect_wetax", "index": 0},
         {"name": "goto_accounting_file_report", "index": 1},
         {"name": "fill_phone", "index": 2},
-        {"name": "enter_file_password", "index": 3},  # 파일선택보다 먼저
+        {"name": "enter_file_password", "index": 3},
         {"name": "select_encrypted_file", "index": 4},
         {"name": "click_convert_file", "index": 5},
         {"name": "click_submit", "index": 6},
@@ -43,18 +53,19 @@ class WetaxLocalTaxWorkflow(BaseWorkflow):
         self, page, context, client_name: str, job_id: int,
         state: StateManager, **kwargs,
     ) -> bool:
-        """위택스 특별징수 회계파일신고.
+        """위택스 특별징수 회계파일신고 — 수임처 1건.
 
-        1번(로그인은 AutomationRunner._wait_for_login_wetax 에서 선행).
-        2~7번은 순차 구현. 미구현 단계는 명확히 실패 처리.
+        선택건/전체 루프가 수임처마다 호출. 전화·비번 후 파일 파이프라인은
+        스텁 성공 → True 반환 → 다음 수임처.
         """
-        # ── 0. 위택스 연결 확인 (로그인은 runner 가 이미 대기 완료·팝업 닫기) ──
+        from src.automation.wetax._common import log
+
+        # ── 0. 연결 (로그인 완료 가정) ──
         if not state.should_skip_step(job_id, "connect_wetax"):
             state.before_step(job_id, "connect_wetax", 0)
-            # AutomationRunner 가 PORTAL_URLS['wetax'](main.do) 로 전환·로그인 대기 완료
             state.after_step(job_id, "connect_wetax")
 
-        # ── 1. 메뉴: 신고 → 특별징수 → 회계파일신고 ──
+        # ── 1. 회계파일신고 화면 ──
         if not state.should_skip_step(job_id, "goto_accounting_file_report"):
             state.before_step(job_id, "goto_accounting_file_report", 1)
             from src.automation.wetax._navigation import goto_accounting_file_report
@@ -67,7 +78,7 @@ class WetaxLocalTaxWorkflow(BaseWorkflow):
                 return False
             state.after_step(job_id, "goto_accounting_file_report")
 
-        # ── 2. 휴대전화번호 ──
+        # ── 2. 휴대전화 (수임처마다 동일 GUI 값 재입력 — 리프레시 대비) ──
         if not state.should_skip_step(job_id, "fill_phone"):
             state.before_step(job_id, "fill_phone", 2)
             from src.automation.wetax._form import fill_mobile_phone
@@ -84,7 +95,7 @@ class WetaxLocalTaxWorkflow(BaseWorkflow):
                 return False
             state.after_step(job_id, "fill_phone", {"phone": phone})
 
-        # ── 3. 파일비밀번호 (파일선택보다 먼저) ──
+        # ── 3. 파일비밀번호 (동일 GUI 값 재입력) ──
         if not state.should_skip_step(job_id, "enter_file_password"):
             state.before_step(job_id, "enter_file_password", 3)
             from src.automation.wetax._form import enter_file_password
@@ -101,22 +112,48 @@ class WetaxLocalTaxWorkflow(BaseWorkflow):
                 return False
             state.after_step(job_id, "enter_file_password")
 
-        # ── 5~7. 파일선택·변환·제출 — 업로드 파일 준비 후 구현 ──
-        # 현재 스냅샷: 로그인~파일비밀번호까지 완료. 아래는 의도적 중단점.
-        remaining = [
-            ("select_encrypted_file", 4, "암호화 파일선택"),
-            ("click_convert_file", 5, "파일변환하기"),
-            ("click_submit", 6, "제출하기"),
-        ]
-        for name, index, label in remaining:
-            if state.should_skip_step(job_id, name):
-                continue
-            state.before_step(job_id, name, index)
-            state.fail_step(
-                job_id, name,
-                f"위택스 '{label}' 단계는 아직 구현되지 않았습니다 "
-                f"(전자신고파일 준비 후 반영 예정). 상세: src/automation/wetax/PROGRESS.md",
-            )
-            return False
+        # ── 4~6. 파일선택 · 변환 · 제출 (스텁 — 파일 준비 후 실구현) ──
+        # 스텁이 True 를 반환해야 선택건/전체 루프가 다음 수임처로 넘어간다.
+        if not state.should_skip_step(job_id, "select_encrypted_file"):
+            state.before_step(job_id, "select_encrypted_file", 4)
+            if _STUB_FILE_PIPELINE:
+                log(
+                    f"  [WETAX stub] [{client_name}] 암호화 파일선택 생략 "
+                    f"(파일 준비 후 구현) — 다음 단계로 진행"
+                )
+                state.after_step(
+                    job_id, "select_encrypted_file",
+                    {"stub": True, "client": client_name},
+                )
+            else:
+                state.fail_step(
+                    job_id, "select_encrypted_file",
+                    "암호화 파일선택 미구현",
+                )
+                return False
+
+        if not state.should_skip_step(job_id, "click_convert_file"):
+            state.before_step(job_id, "click_convert_file", 5)
+            if _STUB_FILE_PIPELINE:
+                log(
+                    f"  [WETAX stub] [{client_name}] 파일변환하기(#btn_next) 생략 "
+                    f"— 다음 단계로 진행"
+                )
+                state.after_step(job_id, "click_convert_file", {"stub": True})
+            else:
+                state.fail_step(job_id, "click_convert_file", "파일변환하기 미구현")
+                return False
+
+        if not state.should_skip_step(job_id, "click_submit"):
+            state.before_step(job_id, "click_submit", 6)
+            if _STUB_FILE_PIPELINE:
+                log(
+                    f"  [WETAX stub] [{client_name}] 제출하기 생략 "
+                    f"(실제출·리프레시 가정) — 수임처 완료, 다음 수임처로"
+                )
+                state.after_step(job_id, "click_submit", {"stub": True})
+            else:
+                state.fail_step(job_id, "click_submit", "제출하기 미구현")
+                return False
 
         return True

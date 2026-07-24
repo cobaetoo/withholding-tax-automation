@@ -61,24 +61,33 @@ def _apply_light_palette(app):
     LIGHT_BTN = QColor("#f5f5f5")
     DARK_TEXT = QColor("#1a1a1a")
     GRAY_TEXT = QColor("#999999")
+    MID = QColor("#e0e0e0")
     p = QPalette()
-    p.setColor(QPalette.Window, LIGHT_BG)
-    p.setColor(QPalette.WindowText, DARK_TEXT)
-    p.setColor(QPalette.Base, LIGHT_BG)
-    p.setColor(QPalette.AlternateBase, QColor("#fafafa"))
-    p.setColor(QPalette.Text, DARK_TEXT)
-    p.setColor(QPalette.Button, LIGHT_BTN)
-    p.setColor(QPalette.ButtonText, DARK_TEXT)
-    p.setColor(QPalette.ToolTipBase, QColor("#1e1e1e"))
-    p.setColor(QPalette.ToolTipText, QColor("#ffffff"))
-    p.setColor(QPalette.Highlight, QColor("#d0e4f7"))
-    p.setColor(QPalette.HighlightedText, DARK_TEXT)
+    # Active / Inactive / Disabled 전 그룹에 라이트 강제
+    for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
+        p.setColor(group, QPalette.Window, LIGHT_BG)
+        p.setColor(group, QPalette.WindowText, DARK_TEXT if group != QPalette.Disabled else GRAY_TEXT)
+        p.setColor(group, QPalette.Base, LIGHT_BG)
+        p.setColor(group, QPalette.AlternateBase, QColor("#fafafa"))
+        p.setColor(group, QPalette.Text, DARK_TEXT if group != QPalette.Disabled else GRAY_TEXT)
+        p.setColor(group, QPalette.Button, LIGHT_BTN)
+        p.setColor(group, QPalette.ButtonText, DARK_TEXT if group != QPalette.Disabled else GRAY_TEXT)
+        p.setColor(group, QPalette.BrightText, DARK_TEXT)
+        p.setColor(group, QPalette.ToolTipBase, QColor("#1e1e1e"))
+        p.setColor(group, QPalette.ToolTipText, QColor("#ffffff"))
+        p.setColor(group, QPalette.Highlight, QColor("#d0e4f7"))
+        p.setColor(group, QPalette.HighlightedText, DARK_TEXT)
+        p.setColor(group, QPalette.Light, LIGHT_BG)
+        p.setColor(group, QPalette.Midlight, QColor("#f0f0f0"))
+        p.setColor(group, QPalette.Mid, MID)
+        p.setColor(group, QPalette.Dark, QColor("#aaaaaa"))
+        p.setColor(group, QPalette.Shadow, QColor("#666666"))
+        p.setColor(group, QPalette.Link, QColor("#0d47a1"))
+        p.setColor(group, QPalette.LinkVisited, QColor("#4a148c"))
     p.setColor(QPalette.PlaceholderText, GRAY_TEXT)
-    # 비활성(disabled) 텍스트도 다크 잔재가 없도록 회색 통일
-    p.setColor(QPalette.Disabled, QPalette.WindowText, GRAY_TEXT)
-    p.setColor(QPalette.Disabled, QPalette.Text, GRAY_TEXT)
-    p.setColor(QPalette.Disabled, QPalette.ButtonText, GRAY_TEXT)
     app.setPalette(p)
+    # 자식 위젯이 시스템 다크 팔레트를 다시 물려받지 않도록
+    app.setStyle("Fusion")
 
 
 def _dispatch_cli_subprocess() -> bool:
@@ -171,11 +180,19 @@ def main():
     app.setStyle("Fusion")
     _apply_light_palette(app)  # 다크 모드 대비 — 라이트 팔레트 강제
 
-    # 스타일시트 로드
+    # 스타일시트 로드 (QWidget 배경 포함 — 다크모드 검정 배경 방어)
     qss_path = resource_path(os.path.join("src", "ui", "resources", "style.qss"))
     if os.path.exists(qss_path):
         with open(qss_path, "r", encoding="utf-8") as f:
             app.setStyleSheet(f.read())
+    else:
+        # qss 누락 시에도 최소 라이트 테마
+        app.setStyleSheet(
+            "QWidget { background-color: #ffffff; color: #1a1a1a; "
+            "font-family: '맑은 고딕', 'Segoe UI', sans-serif; }"
+        )
+    # stylesheet 적용 후에도 팔레트 재적용 (Windows 다크 테마 덮어쓰기 방지)
+    _apply_light_palette(app)
 
     # ── 인증 게이트 ────────────────────────────────────────────────────
     from PySide6.QtWidgets import QMessageBox, QDialog

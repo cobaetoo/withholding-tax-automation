@@ -568,13 +568,16 @@ class AutomationRunner(AsyncWorker):
                 self.phase_changed.emit(phase_id, "failed")
                 return
 
-            if not await self._wait_for_login(portal):
-                if self._stop_event.is_set():
-                    self.log_message.emit("[사용자 중단] 로그인 대기 중단")
-                else:
-                    self.phase_changed.emit(phase_id, "failed")
-                    self.error_occurred.emit("로그인 실패 또는 시간 초과")
-                return
+        # 포털별 로그인 대기 — 전체실행(_handle_run_phase)과 동일.
+        # 세션 재사용(reused=True)이어도 로그아웃/팝업 가능 → 항상 확인.
+        # 위택스: _wait_for_login_wetax 내부에서 로그인 전·후 dismiss_popups 수행.
+        if not await self._wait_for_login(portal):
+            if self._stop_event.is_set():
+                self.log_message.emit("[사용자 중단] 로그인 대기 중단")
+            else:
+                self.phase_changed.emit(phase_id, "failed")
+                self.error_occurred.emit("로그인 실패 또는 시간 초과")
+            return
 
         await self._reconnect_page(portal)
 

@@ -224,9 +224,6 @@ def test_wetax_workflow_reads_kwargs_keys():
     with patch("src.automation.wetax._navigation.goto_accounting_file_report", fake_nav), \
          patch("src.automation.wetax._form.fill_mobile_phone", fake_phone), \
          patch("src.automation.wetax._form.enter_file_password", fake_pw):
-        # remaining steps will fail after password — catch by making select raise skip
-        # Actually after password, select_encrypted_file fails intentionally.
-        # We only need to reach fill_phone + enter_file_password.
         ok = asyncio.run(wf.run_single(
             page=MagicMock(),
             context=MagicMock(),
@@ -237,7 +234,44 @@ def test_wetax_workflow_reads_kwargs_keys():
             phone=TEST_PHONE,
         ))
 
-    # 파일선택 미구현으로 False 이지만, phone/password 는 이미 소비됨
+    # 전화·비번 소비 후 파일 파이프라인 스텁 → True (다음 수임처로 진행)
     assert seen["phone"] == TEST_PHONE
     assert seen["password"] == TEST_PW
-    assert ok is False  # select_encrypted_file 미구현
+    assert ok is True
+
+
+def test_wetax_multi_client_stub_advances_all():
+    """스텁 파이프라인: 수임처 3건 연속 run_single 모두 True."""
+    import asyncio
+    from src.workflows.wetax_local_tax import WetaxLocalTaxWorkflow
+
+    wf = WetaxLocalTaxWorkflow()
+    clients = ["수임A", "수임B", "수임C"]
+
+    async def fake_nav(page, **kw):
+        return True
+
+    async def fake_phone(page, phone, **kw):
+        return True
+
+    async def fake_pw(page, password, **kw):
+        return True
+
+    results = []
+    with patch("src.automation.wetax._navigation.goto_accounting_file_report", fake_nav), \
+         patch("src.automation.wetax._form.fill_mobile_phone", fake_phone), \
+         patch("src.automation.wetax._form.enter_file_password", fake_pw):
+        for name in clients:
+            state = NoopStateManager()
+            ok = asyncio.run(wf.run_single(
+                page=MagicMock(),
+                context=MagicMock(),
+                client_name=name,
+                job_id=0,
+                state=state,
+                password=TEST_PW,
+                phone=TEST_PHONE,
+            ))
+            results.append(ok)
+
+    assert results == [True, True, True]
