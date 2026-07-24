@@ -13,40 +13,47 @@
 | 2 | 메뉴 → 회계파일신고 화면 | `goto_accounting_file_report` → `B070101M31.do` |
 | 3 | 휴대전화번호 입력 | GUI `needs_phone` → `fill_mobile_phone` (`#dclrRlpMblTelno`) |
 | 4 | 파일비밀번호 입력 | GUI `needs_password` → `enter_file_password` (`#filePw`) |
-| 5 | 암호화 파일선택 | `find_jitax_encrypted_file` + `select_encrypted_file` (`#file_upload_0_`) |
-| 6 | 파일변환하기 | `click_convert_file` (`#btn_next` + confirm 수락 → `B070101M32.do`) |
+| 5 | 암호화 파일선택 | `find_jitax_encrypted_file` (`.1`/`.2` only) + `select_encrypted_file` |
+| 6 | 파일변환하기 | `click_convert_file` — confirm 임시수락·복원, 라벨 가드 → M32 |
+
+### 안전 헬퍼 (제출 전 리팩터)
+| 모듈 | 역할 |
+|------|------|
+| `_dialogs.accept_native_dialogs` | confirm/alert 가로채기 + **finally 복원** |
+| `LABEL_CONVERT` / `LABEL_SUBMIT` | M31/M32 동일 `#btn_next` 구분 |
+| `mask_phone` | 로그·step_data 휴대전화 마스킹 |
+| `get_convert_result_summary` / `result_out` | 정상·오류 건수 메타 (err>0 이어도 변환 성공) |
+| `ensure_upload_form` | M31 업로드 화면 보장 (스텁 후·다음 수임처) |
 
 ### 남은 스텁
 | # | 단계 | 예상 셀렉터 / 비고 | 현재 |
 |---|------|-------------------|------|
-| 7 | 제출하기 | M32 `#btn_next`(제출하기) — 제출 후 리프레시 가정 | **STUB** 성공 |
+| 7 | 제출하기 | M32 `#btn_next`(제출하기) — 제출 후 리프레시 가정 | **STUB** + `ensure_upload_form` |
 
 `_STUB_SUBMIT = True` (`wetax_local_tax.py`).  
 변환 성공 후 정상 0건·오류 N건이어도 변환 단계는 성공으로 본다(검증 오류는 파일 재생성 영역).
 
 ### 다수임처 루프 설계 (선택건·전체실행 공통 목표) — ★ 확정
 
-제출 후 화면이 **리프레시**되어 업로드 폼이 초기화된다는 전제:
-
 ```text
 [세션] 로그인 1회 + (필요 시) 회계파일신고 화면 진입 1회
 for 각 수임처:
   1. 동일 휴대전화 재입력   (#dclrRlpMblTelno)  ← GUI phone, 수임처 공통
   2. 동일 파일비밀번호 재입력 (#filePw)         ← GUI password, 수임처 공통
-  3. 해당 수임처 암호화 파일만 교체 업로드      (#file_upload_0_)
-  4. 파일변환하기 클릭                          (#btn_next)
-  5. 제출하기 클릭
-  6. 제출 후 페이지 리프레시 대기 → 폼 빈 상태 확인
-  → 다음 수임처로 (1~6 반복; 로그인/메뉴 재진입 불필요)
+  3. 해당 수임처 암호화 파일만 교체 업로드      (#file_upload_0_, .1/.2)
+  4. 파일변환하기 클릭                          (#btn_next + 변환 라벨)
+  5. 제출하기 — 현재 STUB → ensure_upload_form(M31)
+  (라이브 시) 제출 → 리프레시 → 폼 빈 상태 확인
+  → 다음 수임처로
 ```
 
 | 항목 | 정책 |
 |------|------|
 | 로그인 | runner 단 1회 (선택건/전체 공통) |
-| 메뉴 이동 | 첫 수임처 또는 회계파일신고 URL 이탈 시에만 |
-| 전화·파일비번 | **제출 리프레시마다 다시 넣음** (동일 GUI 값) |
-| 파일 | **수임처마다 다른 파일**만 교체 |
-| 변환·제출 | 수임처마다 `#btn_next` → 제출하기 |
+| 메뉴 이동 | 첫 수임처 또는 `ensure_upload_form` / M32 이탈 시 |
+| 전화·파일비번 | **수임처마다 다시 넣음** (동일 GUI 값, 로그 마스킹) |
+| 파일 | **수임처마다 다른 `.1`/`.2`** 만 교체 |
+| 변환·제출 | 변환 실구현 / 제출 스텁 → M31 복귀 |
 
 **현재 코드:** 수임처마다 `run_single` → 전화·비번 → 파일선택 → **파일변환(M32)** → 제출 스텁 → `True`.  
 다음 수임처 시 `goto` 가 M32 를 업로드 화면으로 보지 않고 **M31 재진입**.
@@ -55,10 +62,11 @@ for 각 수임처:
 
 ## 파일 위치
 - `src/workflows/wetax_local_tax.py` — Phase 13 어댑터·레지스트리
-- `src/automation/wetax/_common.py` — 팝업 닫기
-- `src/automation/wetax/_navigation.py` — 회계파일신고 이동
-- `src/automation/wetax/_form.py` — 휴대전화·파일비밀번호
-- `src/automation/wetax/_constants.py` — URL·필드 id
+- `src/automation/wetax/_common.py` — 팝업 닫기·`mask_phone`
+- `src/automation/wetax/_navigation.py` — 회계파일신고 이동·`ensure_upload_form`
+- `src/automation/wetax/_form.py` — 휴대전화·파일비밀번호·변환
+- `src/automation/wetax/_dialogs.py` — confirm/alert 임시 수락·복원
+- `src/automation/wetax/_constants.py` — URL·필드 id·라벨
 - GUI: 사이드바 **▼ 위택스** > **위택스 지방세 신고**
 - 프로브(개발용): `_probe_wetax_login.py`, `_probe_wetax_dismiss_popups.py`, `_probe_wetax_menu.py`
 
@@ -103,6 +111,9 @@ for 각 수임처:
   `launch_chrome` 에 **CREATE_BREAKAWAY_FROM_JOB** 등 분리 플래그 적용 (`src/utils/chrome_cdp.py`)
 
 ## 변경 이력
+- 2026-07-24: 안전 리팩터 — confirm/alert 임시 수락 후 복원(`_dialogs.accept_native_dialogs`),
+  `#btn_next` 변환/제출 이중 의미 가드(LABEL_CONVERT/SUBMIT), efile 확장자 `.1`/`.2` 만 허용,
+  휴대전화 마스킹, 변환 결과 메타(`get_convert_result_summary`)·`ensure_upload_form`(스텁 후 M31 복귀).
 - 2026-07-24: 파일변환하기 실구현 (`click_convert_file` — confirm 오버라이드 + M32 대기). 제출만 스텁.
 - 2026-07-24: 선택건 다수임처 라이브 확인 — 파일 스텁으로 전화·비번 루프 후 다음 수임처 진행 OK.
 - 2026-07-24: 선택건 재사용 시 로그인 대기 정렬 + 라이트 테마(QSS/팔레트) 강화.

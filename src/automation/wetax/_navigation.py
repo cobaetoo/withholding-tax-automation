@@ -106,3 +106,23 @@ async def _on_accounting_page(page) -> bool:
         return False
     except Exception:
         return False
+
+
+async def ensure_upload_form(
+    page,
+    *,
+    logger: Callable[[str], None] | None = None,
+) -> bool:
+    """업로드 폼(M31) 확보 — 이미 있으면 True, 아니면 goto_accounting_file_report.
+
+    제출(또는 스텁) 후 다음 수임처가 M31 에서 시작하도록 복귀용.
+    """
+    _log = logger or log
+    try:
+        if await _on_accounting_page(page):
+            _log("  [WETAX nav] ensure_upload_form: 이미 M31 업로드 화면")
+            return True
+    except Exception:
+        pass
+    _log("  [WETAX nav] ensure_upload_form: M31 재진입")
+    return await goto_accounting_file_report(page, logger=_log)

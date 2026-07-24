@@ -225,6 +225,14 @@ def test_wetax_workflow_reads_kwargs_keys():
         return True
 
     async def fake_convert(page, **kw):
+        # result_out 이 있으면 메타 채움 (워크플로 호환)
+        out = kw.get("result_out")
+        if isinstance(out, dict):
+            out.clear()
+            out.update({"ok": 1, "err": 0, "url": "mock"})
+        return True
+
+    async def fake_ensure(page, **kw):
         return True
 
     with patch("src.automation.wetax._navigation.goto_accounting_file_report", fake_nav), \
@@ -233,7 +241,8 @@ def test_wetax_workflow_reads_kwargs_keys():
          patch("src.automation.wetax._form.find_jitax_encrypted_file",
                return_value=r"C:\tmp\dummy.2"), \
          patch("src.automation.wetax._form.select_encrypted_file", fake_select), \
-         patch("src.automation.wetax._form.click_convert_file", fake_convert):
+         patch("src.automation.wetax._form.click_convert_file", fake_convert), \
+         patch("src.automation.wetax._navigation.ensure_upload_form", fake_ensure):
         ok = asyncio.run(wf.run_single(
             page=MagicMock(),
             context=MagicMock(),
@@ -273,6 +282,13 @@ def test_wetax_multi_client_stub_advances_all():
         return True
 
     async def fake_convert(page, **kw):
+        out = kw.get("result_out")
+        if isinstance(out, dict):
+            out.clear()
+            out.update({"ok": 0, "err": 0, "url": "mock"})
+        return True
+
+    async def fake_ensure(page, **kw):
         return True
 
     results = []
@@ -282,7 +298,8 @@ def test_wetax_multi_client_stub_advances_all():
          patch("src.automation.wetax._form.find_jitax_encrypted_file",
                return_value=r"C:\tmp\dummy.2"), \
          patch("src.automation.wetax._form.select_encrypted_file", fake_select), \
-         patch("src.automation.wetax._form.click_convert_file", fake_convert):
+         patch("src.automation.wetax._form.click_convert_file", fake_convert), \
+         patch("src.automation.wetax._navigation.ensure_upload_form", fake_ensure):
         for name in clients:
             state = NoopStateManager()
             ok = asyncio.run(wf.run_single(

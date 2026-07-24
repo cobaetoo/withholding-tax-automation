@@ -248,12 +248,13 @@ WEHAGO Phase 11(지방소득세특별징수전자신고, SWER0109)에서 생성�
 홈택스 Phase 12가 원천세(국세) 짝이라면, 본 phase는 지방세 짝이다.
 
 **상태: 부분 구현 (2026-07-24)** — 로그인~파일선택·파일변환까지 실구현.  
-**제출하기만 스텁.** 상세: `src/automation/wetax/PROGRESS.md`.
+**제출하기만 스텁** (`_STUB_SUBMIT`). 상세: `src/automation/wetax/PROGRESS.md`.
 
 > **★전제조건**
 > 1. Phase 11(지방소득세특별징수전자신고)로 전자신고 파일이 먼저 생성되어 있어야 한다(파일선택 단계부터).
 > 2. 전자신고파일 생성 시 설정한 **파일 비밀번호** (GUI 툴바 **비밀번호**, 홈택스와 동일 스타일).
 > 3. 신고 담당자 **휴대전화번호** (GUI 툴바 **휴대전화**).
+> 4. 파일 경로: `바탕화면/지방소득세전자신고_{YYYYMM}/{수임처}/` 아래 **`.1`/`.2` 확장자**만 사용.
 
 #### 특별징수세액 워크플로우 (7단계)
 
@@ -262,16 +263,21 @@ WEHAGO Phase 11(지방소득세특별징수전자신고, SWER0109)에서 생성�
 | 0 | 메인 팝업 닫기 | `dismiss_popups` — 로그인 전·후 (개수 가변 `main-popup-event`) | ✅ |
 | 1 | 공인인증서 로그인 | `main.do` · Human-in-the-loop · `로그인연장`/`btnLogout` 판정 | ✅ |
 | 2 | 메뉴 이동 | **신고 → 특별징수 → 회계파일신고** (`B070101M31.do`) | ✅ |
-| 3 | 휴대전화 | GUI `phone` → `#dclrRlpMblTelno` | ✅ |
+| 3 | 휴대전화 | GUI `phone` → `#dclrRlpMblTelno` (로그 마스킹) | ✅ |
 | 4 | 파일비밀번호 | GUI `password` → `#filePw` (파일선택보다 먼저) | ✅ |
-| 5 | 암호화 파일선택 | Phase 11 폴더 최신 파일 · `#file_upload_0_` | ✅ |
-| 6 | 파일변환하기 | `#btn_next` → `B070101M32.do` (`click_convert_file`) | ✅ |
-| 7 | 제출하기 | M32 `#btn_next`(제출하기) → 페이지 리프레시 가정 | ⏸ STUB 성공 |
+| 5 | 암호화 파일선택 | Phase 11 폴더 최신 **`.1`/`.2`** · `#file_upload_0_` | ✅ |
+| 6 | 파일변환하기 | `#btn_next`+라벨가드 · confirm 임시수락·복원 → `B070101M32` | ✅ |
+| 7 | 제출하기 | 스텁 후 `ensure_upload_form`(M31 복귀) · 실제 제출 미구현 | ⏸ STUB |
 
-**다수임처 루프 (선택건·전체, 파일 단계 구현 시 목표)**  
-제출 후 화면이 리프레시되므로, 수임처마다  
-`동일 휴대전화·동일 파일비밀번호 재입력 → 해당 수임처 파일만 업로드 → #btn_next 변환 → 제출` 을 반복한다.  
-로그인·회계파일신고 메뉴 진입은 세션당 최소화. 상세: `src/automation/wetax/PROGRESS.md`.
+**안전 리팩터 (제출 전)**  
+- `_dialogs.accept_native_dialogs`: confirm/alert 가로채기 **finally 복원** (오제출 방지)  
+- M31/M32 동일 `#btn_next` → `LABEL_CONVERT`/`LABEL_SUBMIT` 로 구분  
+- 변환 결과 메타(`ok`/`err` 건수) step_data 기록 — 오류 N건이어도 변환 단계는 성공  
+- 스텁 제출 후 `ensure_upload_form` 으로 다음 수임처 M31 계약 통일  
+
+**다수임처 루프**  
+`전화·비번 재입력 → 파일 업로드 → 파일변환 → (제출 스텁 + M31 복귀)` 반복.  
+실제 제출·리프레시는 이후. 상세: `src/automation/wetax/PROGRESS.md`.
 
 **GUI**
 - 사이드바: 「위택스」 > 「위택스 지방세 신고」(phase 13)

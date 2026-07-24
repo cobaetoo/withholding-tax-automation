@@ -7,7 +7,7 @@ import os
 import time
 from typing import Callable
 
-from src.automation.wetax._common import log
+from src.automation.wetax._common import log, mask_phone
 from src.automation.wetax._constants import (
     ACCOUNTING_CONVERT_RESULT_PATH,
     ACCOUNTING_FILE_REPORT_PATH,
@@ -15,8 +15,12 @@ from src.automation.wetax._constants import (
     FIELD_MOBILE,
     FIELD_FILE_PW,
     FIELD_FILE_INPUT,
+    JITAX_EFILE_EXTS,
     JITAX_EFILE_SITE,
+    LABEL_CONVERT,
+    LABEL_SUBMIT,
 )
+from src.automation.wetax._dialogs import accept_native_dialogs
 from src.utils.save_path import make_save_dir
 
 
@@ -64,9 +68,12 @@ async def fill_mobile_phone(
         # 하이픈 유무 차이 허용 — 숫자만 비교
         digits = lambda s: "".join(c for c in s if c.isdigit())
         if digits(actual) != digits(phone) and actual.strip() != phone:
-            _log(f"  [WETAX form] 휴대전화 불일치 expect={phone!r} got={actual!r}")
+            _log(
+                f"  [WETAX form] 휴대전화 불일치 "
+                f"expect={mask_phone(phone)!r} got={mask_phone(actual)!r}"
+            )
             return False
-        _log(f"  [WETAX form] 휴대전화 입력 완료: {actual}")
+        _log(f"  [WETAX form] 휴대전화 입력 완료: {mask_phone(actual)}")
         return True
     except Exception as e:
         _log(f"  [WETAX form] 휴대전화 입력 실패: {e}")
@@ -147,16 +154,24 @@ def find_jitax_encrypted_file(
     """Phase 11 컨벤션 폴더에서 전자신고 파일 최신 1개 경로 반환.
 
     경로: {바탕화면}/지방소득세전자신고_{YYYYMM}/{수임처}/
-    확장자 .2 등 포함, 하위 파일 중 mtime 최신.
+    허용 확장자: `.1`, `.2` (대소문자 무시). 그 외 파일은 스킵.
+    허용 파일이 없으면 None (임의 파일 폴백 없음).
     """
     save_dir = make_save_dir(JITAX_EFILE_SITE, client_name, year=year, month=month)
     if not os.path.isdir(save_dir):
         return None
-    files = []
+    allowed = {ext.lower() for ext in JITAX_EFILE_EXTS}
+    files: list[str] = []
     for name in os.listdir(save_dir):
+        if name.startswith("."):
+            continue
         path = os.path.join(save_dir, name)
-        if os.path.isfile(path) and not name.startswith("."):
-            files.append(path)
+        if not os.path.isfile(path):
+            continue
+        _, ext = os.path.splitext(name)
+        if ext.lower() not in allowed:
+            continue
+        files.append(path)
     if not files:
         return None
     return max(files, key=os.path.getmtime)
@@ -235,6 +250,7 @@ async def click_convert_file(
     *,
     logger: Callable[[str], None] | None = None,
     timeout_s: float = 60.0,
+    result_out: dict | None = None,
 ) -> bool:
     """파일변환하기 클릭 — M31 `#btn_next` → 서식검증 화면(M32).
 
@@ -244,17 +260,32 @@ async def click_convert_file(
       3) 동일 id `#btn_next` 가 M32 에서 "제출하기" 로 바뀜
 
     Playwright 의 dialog accept 가 CDP 에서 레이스 나기 쉬워
-    `window.confirm = () => true` 로 선제 수락 후 DOM click.
+    `accept_native_dialogs` 로 임시 수락 후 DOM click (finally 복원).
     변환 자체 성공 ≠ 신고 정상(오류 1건이어도 True — 제출 단계에서 판단).
+
+    Args:
+        result_out: 제공 시 성공 시 `{ok, err, url}` 로 채움 (W4-lite).
     """
     _log = logger or log
     sel = f"#{BTN_CONVERT}"
+
+    async def _fill_result(summary: dict | None = None) -> None:
+        if result_out is None:
+            return
+        if summary is None:
+            try:
+                summary = await get_convert_result_summary(page)
+            except Exception:
+                summary = {"ok": None, "err": None, "url": ""}
+        result_out.clear()
+        result_out.update(summary)
 
     # 이미 변환 결과(M32) 이면 성공으로 간주 (재시도·스킵 경로)
     try:
         url0 = page.url or ""
         if ACCOUNTING_CONVERT_RESULT_PATH in url0:
             _log("  [WETAX form] 이미 서식검증 화면(M32) — 변환 생략")
+            await _fill_result()
             return True
     except Exception:
         pass
@@ -266,36 +297,29 @@ async def click_convert_file(
         _log(f"  [WETAX form] 파일변환하기({sel}) 미표시: {e}")
         return False
 
-    # 업로드 화면(M31) 인지 — M32 의 "제출하기" 를 변환으로 누르지 않도록
+    # W2: M31 URL 이거나 버튼 라벨이 변환 — 제출 라벨만 있으면 거부
     try:
         url = page.url or ""
-        if ACCOUNTING_FILE_REPORT_PATH not in url:
-            # 텍스트로 한 번 더 확인
-            label = (await loc.first.inner_text() or "").replace("\n", " ")
-            if "파일변환" not in label and "변환" not in label:
-                _log(
-                    f"  [WETAX form] 변환 버튼이 아님 (url={url!r} label={label!r})"
-                )
-                return False
-    except Exception:
-        pass
-
-    # confirm 자동 수락 (CDP 네이티브 dialog 레이스 회피)
-    try:
-        await page.evaluate(
-            """() => {
-              window.__wetax_confirm_msgs = [];
-              window.confirm = (msg) => {
-                window.__wetax_confirm_msgs.push(String(msg || ''));
-                return true;
-              };
-              window.alert = (msg) => {
-                window.__wetax_confirm_msgs.push('ALERT:' + String(msg || ''));
-              };
-            }"""
+        label = (await loc.first.inner_text() or "").replace("\n", " ").strip()
+        on_m31 = ACCOUNTING_FILE_REPORT_PATH in url
+        looks_convert = LABEL_CONVERT in label or "변환" in label
+        looks_submit = (
+            LABEL_SUBMIT in label
+            or ("제출" in label and LABEL_CONVERT not in label and "변환" not in label)
         )
+        if looks_submit and not looks_convert:
+            _log(
+                f"  [WETAX form] 제출 버튼으로 보임 — 변환 거부 "
+                f"(url={url!r} label={label!r})"
+            )
+            return False
+        if not on_m31 and not looks_convert:
+            _log(
+                f"  [WETAX form] 변환 버튼이 아님 (url={url!r} label={label!r})"
+            )
+            return False
     except Exception as e:
-        _log(f"  [WETAX form] confirm 오버라이드 실패(계속 진행): {e}")
+        _log(f"  [WETAX form] 변환 버튼 라벨 확인 실패(계속 진행): {e}")
 
     try:
         await loc.first.scroll_into_view_if_needed(timeout=5000)
@@ -304,39 +328,42 @@ async def click_convert_file(
 
     _log("  [WETAX form] 파일변환하기 클릭")
     clicked = False
-    try:
-        await loc.first.click(timeout=8000, force=True)
-        clicked = True
-    except Exception as e:
-        _log(f"  [WETAX form] locator 클릭 실패, DOM click 폴백: {e}")
+    # 클릭 구간에만 confirm 오버라이드 → finally 복원 후 M32 대기
+    async with accept_native_dialogs(
+        page, accept=True, message_substr="검증", logger=_log,
+    ):
         try:
-            await page.evaluate(
-                """(id) => {
-                  const b = document.getElementById(id);
-                  if (!b) return false;
-                  b.scrollIntoView({block: 'center'});
-                  b.click();
-                  return true;
-                }""",
-                BTN_CONVERT,
-            )
+            await loc.first.click(timeout=8000, force=True)
             clicked = True
-        except Exception as e2:
-            _log(f"  [WETAX form] 파일변환하기 클릭 실패: {e2}")
-            return False
+        except Exception as e:
+            _log(f"  [WETAX form] locator 클릭 실패, DOM click 폴백: {e}")
+            try:
+                await page.evaluate(
+                    """(id) => {
+                      const b = document.getElementById(id);
+                      if (!b) return false;
+                      b.scrollIntoView({block: 'center'});
+                      b.click();
+                      return true;
+                    }""",
+                    BTN_CONVERT,
+                )
+                clicked = True
+            except Exception as e2:
+                _log(f"  [WETAX form] 파일변환하기 클릭 실패: {e2}")
+                return False
+
+        try:
+            msgs = await page.evaluate("() => window.__wetax_confirm_msgs || []")
+            if msgs:
+                _log(f"  [WETAX form] confirm/alert: {msgs[0][:80]}")
+        except Exception:
+            pass
 
     if not clicked:
         return False
 
-    # confirm 메시지 로그 (값만, 민감정보 없음)
-    try:
-        msgs = await page.evaluate("() => window.__wetax_confirm_msgs || []")
-        if msgs:
-            _log(f"  [WETAX form] confirm/alert: {msgs[0][:80]}")
-    except Exception:
-        pass
-
-    # M32 도착 또는 업로드 폼 소멸 대기
+    # M32 도착 대기 (confirm 은 이미 복원된 상태)
     deadline = time.monotonic() + timeout_s
     last_url = ""
     while time.monotonic() < deadline:
@@ -344,13 +371,13 @@ async def click_convert_file(
             url = page.url or ""
             last_url = url
             if ACCOUNTING_CONVERT_RESULT_PATH in url:
-                summary = await _convert_result_summary(page)
+                summary = await get_convert_result_summary(page)
                 _log(
                     f"  [WETAX form] 파일변환 완료 → 서식검증 화면 "
                     f"(정상={summary.get('ok')} 오류={summary.get('err')})"
                 )
+                await _fill_result(summary)
                 return True
-            # URL 은 같고 SPA 전환인 경우 — 업로드 필드 소멸 + 제출 라벨
             has_pw = await page.locator(f"#{FIELD_FILE_PW}").count()
             btn_text = ""
             try:
@@ -359,11 +386,12 @@ async def click_convert_file(
             except Exception:
                 pass
             if has_pw == 0 and ("제출" in btn_text):
-                summary = await _convert_result_summary(page)
+                summary = await get_convert_result_summary(page)
                 _log(
                     f"  [WETAX form] 파일변환 완료 (폼 전환) "
                     f"(정상={summary.get('ok')} 오류={summary.get('err')})"
                 )
+                await _fill_result(summary)
                 return True
         except Exception:
             pass
@@ -373,10 +401,13 @@ async def click_convert_file(
     return False
 
 
-async def _convert_result_summary(page) -> dict:
-    """M32 본문에서 정상/오류 건수 대략 추출 (로그·step_data 용)."""
+async def get_convert_result_summary(page) -> dict:
+    """M32 본문에서 정상/오류 건수·URL 추출 (로그·step_data 용).
+
+    정책: err>0 이어도 호출부에서 실패로 보지 않음 (W4-lite, 정책 미정).
+    """
     try:
-        return await page.evaluate(
+        data = await page.evaluate(
             """() => {
               const t = (document.body && document.body.innerText) || '';
               const ok = (t.match(/정상\\s*신고\\s*내역\\s*(\\d+)\\s*건/) || [])[1];
@@ -384,8 +415,20 @@ async def _convert_result_summary(page) -> dict:
               return {
                 ok: ok != null ? parseInt(ok, 10) : null,
                 err: err != null ? parseInt(err, 10) : null,
+                url: location.href || '',
               };
             }"""
         )
+        if isinstance(data, dict):
+            return data
     except Exception:
-        return {"ok": None, "err": None}
+        pass
+    try:
+        url = page.url or ""
+    except Exception:
+        url = ""
+    return {"ok": None, "err": None, "url": url}
+
+
+# 하위 호환 별칭
+_convert_result_summary = get_convert_result_summary

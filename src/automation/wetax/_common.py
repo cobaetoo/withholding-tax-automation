@@ -10,6 +10,24 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
+def mask_phone(phone: str) -> str:
+    """로그·에러 메시지용 휴대전화 마스킹 (중간 숫자 숨김).
+
+    예) 010-1234-5678 → 010-****-5678, 01012345678 → 010****5678
+    숫자가 7자리 미만이면 `*` 만 반환 (원문 비노출).
+    """
+    s = (phone or "").strip()
+    if not s:
+        return ""
+    digits = "".join(c for c in s if c.isdigit())
+    if len(digits) < 7:
+        return "*" * max(len(digits), 4) if digits else "****"
+    head, tail = digits[:3], digits[-4:]
+    if "-" in s:
+        return f"{head}-****-{tail}"
+    return f"{head}****{tail}"
+
+
 # Playwright locator 후보 — 개수·id 가 실행마다 달라도 클래스/패턴으로 잡는다.
 # (라이브 확인 2026-07: div.main-popup-event + button.close-btn, fnCloseBtn → .hide())
 _CLOSE_BTN_SELECTORS = (

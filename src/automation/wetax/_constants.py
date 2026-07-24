@@ -19,5 +19,12 @@ FIELD_PHONE = "dclrRlpTelno"           # 전화번호 (유선, 기입력될 수 
 FIELD_MOBILE = "dclrRlpMblTelno"       # 휴대전화번호 ★ 담당자 입력
 FIELD_FILE_INPUT = "file_upload_0_"    # 암호화 파일 <input type=file>
 FIELD_FILE_PW = "filePw"               # 파일비밀번호
-BTN_CONVERT = "btn_next"               # 파일변환하기 (M31 하단). M32 에서는 같은 id 가 제출하기
+# M31 하단 "파일변환하기" / M32 하단 "제출하기" — **동일 id** (`#btn_next`).
+# 클릭 전에 URL(M31) 또는 버튼 라벨로 구분해야 함 (W2).
+BTN_CONVERT = "btn_next"               # 파일변환하기 (M31). M32 동일 id 는 제출하기
+BTN_SUBMIT = "btn_next"                # 제출하기 (M32) — BTN_CONVERT 와 id 동일 (별칭)
+LABEL_CONVERT = "파일변환"             # 버튼 텍스트 부분일치
+LABEL_SUBMIT = "제출하기"              # 제출 라벨 (부분일치 "제출" 도 사용)
+# Phase 11 전자신고 허용 확장자 (find_jitax_encrypted_file)
+JITAX_EFILE_EXTS = (".1", ".2")
 # 제출 후 페이지 리프레시 → 수임처마다 전화·비번 재입력 + 파일만 교체 (PROGRESS 다수임처 루프)
