@@ -221,9 +221,19 @@ def test_wetax_workflow_reads_kwargs_keys():
         seen["password"] = password
         return True
 
+    async def fake_select(page, path, **kw):
+        return True
+
+    async def fake_convert(page, **kw):
+        return True
+
     with patch("src.automation.wetax._navigation.goto_accounting_file_report", fake_nav), \
          patch("src.automation.wetax._form.fill_mobile_phone", fake_phone), \
-         patch("src.automation.wetax._form.enter_file_password", fake_pw):
+         patch("src.automation.wetax._form.enter_file_password", fake_pw), \
+         patch("src.automation.wetax._form.find_jitax_encrypted_file",
+               return_value=r"C:\tmp\dummy.2"), \
+         patch("src.automation.wetax._form.select_encrypted_file", fake_select), \
+         patch("src.automation.wetax._form.click_convert_file", fake_convert):
         ok = asyncio.run(wf.run_single(
             page=MagicMock(),
             context=MagicMock(),
@@ -232,16 +242,18 @@ def test_wetax_workflow_reads_kwargs_keys():
             state=state,
             password=TEST_PW,
             phone=TEST_PHONE,
+            year=2026,
+            month=7,
         ))
 
-    # 전화·비번 소비 후 파일 파이프라인 스텁 → True (다음 수임처로 진행)
+    # 전화·비번 소비 후 파일선택·변환(모킹) + 제출 스텁 → True
     assert seen["phone"] == TEST_PHONE
     assert seen["password"] == TEST_PW
     assert ok is True
 
 
 def test_wetax_multi_client_stub_advances_all():
-    """스텁 파이프라인: 수임처 3건 연속 run_single 모두 True."""
+    """제출 스텁: 수임처 3건 연속 run_single 모두 True (파일·변환 모킹)."""
     import asyncio
     from src.workflows.wetax_local_tax import WetaxLocalTaxWorkflow
 
@@ -257,10 +269,20 @@ def test_wetax_multi_client_stub_advances_all():
     async def fake_pw(page, password, **kw):
         return True
 
+    async def fake_select(page, path, **kw):
+        return True
+
+    async def fake_convert(page, **kw):
+        return True
+
     results = []
     with patch("src.automation.wetax._navigation.goto_accounting_file_report", fake_nav), \
          patch("src.automation.wetax._form.fill_mobile_phone", fake_phone), \
-         patch("src.automation.wetax._form.enter_file_password", fake_pw):
+         patch("src.automation.wetax._form.enter_file_password", fake_pw), \
+         patch("src.automation.wetax._form.find_jitax_encrypted_file",
+               return_value=r"C:\tmp\dummy.2"), \
+         patch("src.automation.wetax._form.select_encrypted_file", fake_select), \
+         patch("src.automation.wetax._form.click_convert_file", fake_convert):
         for name in clients:
             state = NoopStateManager()
             ok = asyncio.run(wf.run_single(
@@ -271,6 +293,8 @@ def test_wetax_multi_client_stub_advances_all():
                 state=state,
                 password=TEST_PW,
                 phone=TEST_PHONE,
+                year=2026,
+                month=7,
             ))
             results.append(ok)
 

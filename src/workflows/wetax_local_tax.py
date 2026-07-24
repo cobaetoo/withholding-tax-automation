@@ -7,27 +7,26 @@ WEHAGO Phase 11(지방소득세특별징수전자신고) 전자신고파일을 �
   2. 회계파일신고 화면 (이미 있으면 no-op)
   3. 휴대전화 (GUI phone → #dclrRlpMblTelno)
   4. 파일비밀번호 (GUI password → #filePw)
-  5. 암호화 파일선택 (수임처별) — STUB (파일 준비 후 구현)
-  6. 파일변환하기 (#btn_next) — STUB
+  5. 암호화 파일선택 (수임처별) — 구현
+     경로: 지방소득세전자신고_{YYYYMM}/{수임처}/ 최신 파일
+  6. 파일변환하기 (#btn_next) — 구현 (confirm 수락 → M32 서식검증)
   7. 제출하기 — STUB (실제 제출 시 페이지 리프레시 가정)
 
-다수임처(선택건/전체) 루프:
-  로그인 1회 후 수임처마다 run_single 호출.
-  실제 제출·리프레시 전에도 스텁이 True 를 반환하므로 다음 수임처로 진행.
-  파일 준비 후 5~7 만 실구현하면
-  「전화·비번 재입력 → 파일 교체 → 변환 → 제출 → 리프레시」 모델이 된다.
+다수임처: 전화·비번 재입력 → 파일 교체 → 변환 → (제출 스텁) → 다음 수임처.
+  다음 수임처 시 goto 가 M32 를 감지해 M31 업로드 화면으로 복귀.
 
 portal='wetax'. phase_id 는 사이드바 정렬·표시용.
 """
+
+import os
 
 from src.workflows.registry import register
 from src.workflows.base import BaseWorkflow
 from src.batch.state import StateManager
 
 
-# 파일 업로드·변환·제출 실구현 전까지 True.
-# 선택건/전체 다수임처 루프가 전화·비번까지 돌고 다음 수임처로 넘어가도록 함.
-_STUB_FILE_PIPELINE = True
+# 제출만 스텁. True 면 제출 클릭 생략 후 다음 수임처 (변환은 실구현).
+_STUB_SUBMIT = True
 
 
 @register(
@@ -55,8 +54,7 @@ class WetaxLocalTaxWorkflow(BaseWorkflow):
     ) -> bool:
         """위택스 특별징수 회계파일신고 — 수임처 1건.
 
-        선택건/전체 루프가 수임처마다 호출. 전화·비번 후 파일 파이프라인은
-        스텁 성공 → True 반환 → 다음 수임처.
+        선택건/전체 루프가 수임처마다 호출. 변환까지 실구현, 제출은 스텁.
         """
         from src.automation.wetax._common import log
 
@@ -112,44 +110,55 @@ class WetaxLocalTaxWorkflow(BaseWorkflow):
                 return False
             state.after_step(job_id, "enter_file_password")
 
-        # ── 4~6. 파일선택 · 변환 · 제출 (스텁 — 파일 준비 후 실구현) ──
-        # 스텁이 True 를 반환해야 선택건/전체 루프가 다음 수임처로 넘어간다.
+        # ── 4. 암호화 파일선택 (Phase 11 컨벤션 폴더) ──
         if not state.should_skip_step(job_id, "select_encrypted_file"):
             state.before_step(job_id, "select_encrypted_file", 4)
-            if _STUB_FILE_PIPELINE:
-                log(
-                    f"  [WETAX stub] [{client_name}] 암호화 파일선택 생략 "
-                    f"(파일 준비 후 구현) — 다음 단계로 진행"
-                )
-                state.after_step(
-                    job_id, "select_encrypted_file",
-                    {"stub": True, "client": client_name},
-                )
-            else:
+            from src.automation.wetax._form import (
+                find_jitax_encrypted_file,
+                select_encrypted_file,
+            )
+            year = kwargs.get("year")
+            month = kwargs.get("month")
+            file_path = find_jitax_encrypted_file(client_name, year=year, month=month)
+            if not file_path:
                 state.fail_step(
                     job_id, "select_encrypted_file",
-                    "암호화 파일선택 미구현",
+                    f"전자신고 파일 없음: 지방소득세전자신고_{year or '?'}{int(month or 0):02d}/"
+                    f"{client_name.replace(' ', '_')}/ 를 확인하세요.",
                 )
                 return False
+            ok = await select_encrypted_file(page, file_path)
+            if not ok:
+                state.fail_step(
+                    job_id, "select_encrypted_file",
+                    f"파일 선택 실패: {file_path}",
+                )
+                return False
+            state.after_step(
+                job_id, "select_encrypted_file",
+                {"file": os.path.basename(file_path)},
+            )
 
+        # ── 5. 파일변환하기 (실구현) ──
         if not state.should_skip_step(job_id, "click_convert_file"):
             state.before_step(job_id, "click_convert_file", 5)
-            if _STUB_FILE_PIPELINE:
-                log(
-                    f"  [WETAX stub] [{client_name}] 파일변환하기(#btn_next) 생략 "
-                    f"— 다음 단계로 진행"
+            from src.automation.wetax._form import click_convert_file
+            ok = await click_convert_file(page)
+            if not ok:
+                state.fail_step(
+                    job_id, "click_convert_file",
+                    "파일변환하기 실패 (확인창·화면 전환 타임아웃)",
                 )
-                state.after_step(job_id, "click_convert_file", {"stub": True})
-            else:
-                state.fail_step(job_id, "click_convert_file", "파일변환하기 미구현")
                 return False
+            state.after_step(job_id, "click_convert_file")
 
+        # ── 6. 제출하기 (스텁 — 실제 클릭은 추후) ──
         if not state.should_skip_step(job_id, "click_submit"):
             state.before_step(job_id, "click_submit", 6)
-            if _STUB_FILE_PIPELINE:
+            if _STUB_SUBMIT:
                 log(
                     f"  [WETAX stub] [{client_name}] 제출하기 생략 "
-                    f"(실제출·리프레시 가정) — 수임처 완료, 다음 수임처로"
+                    f"— 수임처 완료, 다음 수임처로"
                 )
                 state.after_step(job_id, "click_submit", {"stub": True})
             else:

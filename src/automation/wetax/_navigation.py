@@ -82,13 +82,27 @@ async def goto_accounting_file_report(
 
 
 async def _on_accounting_page(page) -> bool:
+    """업로드 화면(M31) 여부.
+
+    파일변환 후 M32(서식검증) 도 제목은 '회계파일신고' 이므로 title 만으로
+    판정하면 다음 수임처 때 재진입이 스킵된다. URL 경로(M31) 또는
+    업로드 전용 필드(#filePw / #file_upload_0_) 존재를 본다.
+    """
     try:
         url = page.url or ""
         if ACCOUNTING_FILE_REPORT_PATH in url:
             return True
         if WETAX_HOST not in url:
             return False
-        title = await page.title()
-        return "회계파일신고" in (title or "")
+        # M32 등 다른 단계면 False → goto 가 M31 로 다시 이동
+        if "/B070101M" in url and ACCOUNTING_FILE_REPORT_PATH not in url:
+            return False
+        # URL 이 애매할 때 업로드 폼 필드로 판정
+        try:
+            if await page.locator("#filePw, #file_upload_0_").count() > 0:
+                return True
+        except Exception:
+            pass
+        return False
     except Exception:
         return False
