@@ -76,8 +76,8 @@ class BatchEngine:
         self._step_repo = StepRepository(self.db)
         self._state = StateManager(self._step_repo)
 
-        # 크래시 복구: 이전 실행이 비정상 종료되었는지 확인
-        crashed = self._batch_repo.mark_crashed_as_recoverable()
+        # 크래시 복구: 이 포털의 running/paused 만 crashed 로 (TD-10)
+        crashed = self._batch_repo.mark_crashed_as_recoverable(self.portal)
         if crashed:
             portal_names = [b.portal for b in crashed]
             print(f"  크래시 배치 감지: {portal_names}")

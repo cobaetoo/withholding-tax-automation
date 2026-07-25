@@ -418,13 +418,17 @@ class ClientRepository:
         clients_data: [{"name","business_number","report_cycle"}, ...] (portal 고정, 기본 wehago)
         이름 기준 매칭 — 새로가져오기가 name 을 key 로 쓰므로 안정(이름이 바뀌면 미복원).
         """
+        # TD-05/17: portal 스코프 — 타 포털 수임처·override 보호
         overrides = {
             n: m for n, m in self.db.conn.execute(
                 "SELECT name, management_number FROM clients "
-                "WHERE management_number != ''"
+                "WHERE management_number != '' AND portal = ?",
+                (portal,),
             ).fetchall()
         }
-        self.db.conn.execute("DELETE FROM clients")
+        self.db.conn.execute(
+            "DELETE FROM clients WHERE portal = ?", (portal,),
+        )
         for c in clients_data:
             new_id = self.upsert(Client(
                 name=c["name"], portal=portal,
@@ -598,11 +602,17 @@ class BatchRepository:
             (total, now_iso(), batch_id),
         )
 
-    def mark_crashed_as_recoverable(self) -> list[Batch]:
+    def mark_crashed_as_recoverable(
+        self, portal: str | None = None,
+    ) -> list[Batch]:
         """비정상 종료된 배치를 crashed로 표시
 
         재시작 시 호출. running/paused 상태의 배치가 있으면
         크래시로 간주하고 상태를 crashed로 변경.
+
+        Args:
+            portal: 지정 시 해당 포털만 대상 (TD-10). None 이면 전체
+                (레거시·테스트용 — 프로덕션 engine 은 portal 전달).
 
         Returns:
             크래시로 표시된 배치 목록
@@ -610,10 +620,18 @@ class BatchRepository:
         crashed = []
         self.db.begin()
         try:
-            rows = self.db.conn.execute(
-                """SELECT * FROM batches
-                   WHERE status IN ('running', 'paused')"""
-            ).fetchall()
+            if portal:
+                rows = self.db.conn.execute(
+                    """SELECT * FROM batches
+                       WHERE status IN ('running', 'paused')
+                         AND portal = ?""",
+                    (portal,),
+                ).fetchall()
+            else:
+                rows = self.db.conn.execute(
+                    """SELECT * FROM batches
+                       WHERE status IN ('running', 'paused')"""
+                ).fetchall()
 
             for row in rows:
                 batch = self._row_to_batch(row)

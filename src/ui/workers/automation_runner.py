@@ -688,35 +688,54 @@ class AutomationRunner(AsyncWorker):
             self.phase_changed.emit(phase_id, "failed")
 
     def _reset_batch(self, db_path: str, portal: str, phase_id: int):
-        """이전 배치/잡/단계를 모두 삭제하여 깨끗한 상태로 초기화"""
+        """실행 전 배치 정리 (TD-02 / TD-17).
+
+        이전: portal 의 steps/jobs/batches 전부 DELETE → 크래시 복구 불가,
+              list phase 는 clients 까지 전 포털 wipe.
+        변경:
+          - list phase: clients/배치 wipe 하지 않음 (새로가져오기는
+            replace_clients_preserving_mgmt 경로).
+          - 일반 phase: 해당 portal 의 running/paused → crashed 로 표시만.
+            completed/archived 배치(+jobs/steps)만 삭제해 동일 연월 재실행 가능.
+            crashed/created 는 유지 → prepare_batch 가 재사용·복구.
+        """
         if not os.path.exists(db_path):
             return
 
-        from src.batch.db import BatchDB
+        from src.batch.db import BatchDB, BatchRepository
+        from src.workflows.registry import get_phase_info
+
+        if (get_phase_info(phase_id) or {}).get("is_list_phase"):
+            # 수임처 리스트 phase 는 start_phase 초반에 early-return 하므로
+            # 실질 dead path. 실수로 호출돼도 전 포털 wipe 하지 않음 (TD-17).
+            return
 
         with BatchDB(db_path) as db:
             conn = db.conn
-            from src.workflows.registry import get_phase_info
-            if (get_phase_info(phase_id) or {}).get("is_list_phase"):
-                conn.execute("DELETE FROM steps")
-                conn.execute("DELETE FROM jobs")
-                conn.execute("DELETE FROM batches")
-                conn.execute("DELETE FROM clients")
-            else:
-                conn.execute(
-                    "DELETE FROM steps WHERE job_id IN "
-                    "(SELECT j.id FROM jobs j JOIN batches b ON j.batch_id = b.id WHERE b.portal = ?)",
-                    (portal,),
-                )
-                conn.execute(
-                    "DELETE FROM jobs WHERE batch_id IN "
-                    "(SELECT id FROM batches WHERE portal = ?)",
-                    (portal,),
-                )
-                conn.execute(
-                    "DELETE FROM batches WHERE portal = ?",
-                    (portal,),
-                )
+            # 1) 비정상 종료 후보 → crashed (포털 스코프, TD-10 와 정합)
+            BatchRepository(db).mark_crashed_as_recoverable(portal)
+
+            # 2) 완료·아카이브만 제거 (동일 연월 재실행용). crashed/created 유지.
+            conn.execute(
+                """DELETE FROM steps WHERE job_id IN (
+                     SELECT j.id FROM jobs j
+                     JOIN batches b ON j.batch_id = b.id
+                     WHERE b.portal = ? AND b.status IN ('completed', 'archived')
+                   )""",
+                (portal,),
+            )
+            conn.execute(
+                """DELETE FROM jobs WHERE batch_id IN (
+                     SELECT id FROM batches
+                     WHERE portal = ? AND status IN ('completed', 'archived')
+                   )""",
+                (portal,),
+            )
+            conn.execute(
+                """DELETE FROM batches
+                   WHERE portal = ? AND status IN ('completed', 'archived')""",
+                (portal,),
+            )
 
     async def _ensure_browser(self, portal: str) -> bool:
         """포털에 맞는 Chrome 인스턴스 실행/재사용.

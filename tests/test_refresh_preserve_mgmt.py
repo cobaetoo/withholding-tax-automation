@@ -55,6 +55,29 @@ def test_refresh_preserves_management_number_override():
         os.unlink(path)
 
 
+def test_refresh_does_not_wipe_other_portal_clients():
+    """TD-05: wehago 새로가져오기가 nhis_edi 수임처를 지우면 안 됨."""
+    path = _fresh_db()
+    try:
+        _seed(path, "주식회사A", "111-22-33333", "111223333399")
+        with BatchDB(path) as db:
+            repo = ClientRepository(db)
+            repo.upsert(Client(
+                name="건강보험수임", portal="nhis_edi",
+                business_number="999-88-77777", enabled=True,
+            ))
+            repo.replace_clients_preserving_mgmt([
+                {"name": "주식회사A", "business_number": "111-22-33333", "report_cycle": ""},
+            ], portal="wehago")
+        with BatchDB(path) as db:
+            repo = ClientRepository(db)
+            assert repo.get_by_name("주식회사A", "wehago") is not None
+            nhis = repo.get_by_name("건강보험수임", "nhis_edi")
+            assert nhis is not None, "타 포털 수임처 wipe 되면 안 됨"
+    finally:
+        os.unlink(path)
+
+
 def test_refresh_deletes_missing_and_inserts_new_empty():
     """누락(스크랩에 없음) 행은 삭제, 신규 행은 빈 mgmt 로 INSERT."""
     path = _fresh_db()
