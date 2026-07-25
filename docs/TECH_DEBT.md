@@ -3,9 +3,13 @@
 > **목적:** 원천징수세 자동화 프로젝트의 기술 부채·결함·로드맵을 **단일 진실표**로 통합 관리.
 > 산재해 있던 부채 관련 내용(핸드오프·도메인 PROGRESS·GUIDE 임베디드 리스크)을 한곳에서 우선순위화한다.
 >
-> **기준 시점:** 2026-07-25 · **버전:** `1.1.3` (`src/version.py`) · **HEAD:** (TD-05/17/02/10 적용 후 커밋)
+> **기준 시점:** 2026-07-25 · **버전:** `1.1.3` (`src/version.py`) · **HEAD:** `6484692`
 > **관점:** GUI 프로그램(`gui_main.py` → `MainWindow` → Workers → Workflows → Automation → Utils → Chrome CDP) 기준.
 > 코드를 수정하기 전, 본 문서의 해당 항목과 [§1 산재 문서 관계]를 함께 읽을 것.
+>
+> **세션 마무리(2026-07-25):** 옵션 A(TD-05·17·02·10) 완료·push. **Wave 3(옵션 B)는 보류**
+> (실행 경로 변경·골든 미캡처·파급 전 Phase — 위험 높음). 다음 구조 작업은
+> 골든 기준선 후 TD-04/13 또는 Wave 4 저위험부터.
 >
 > **⚠ 이 문서는 코드 상태를 스냅샷한 것이다.** 줄번호는 리팩토링으로 밀린다.
 > 항목을 착수하기 전 §9 변경 이력의 마지막 검증일과 현재 HEAD 를 대조하고,
@@ -34,10 +38,11 @@
 
 | 기존 문서 | 본 레지스터와의 관계 |
 |---|---|
-| `docs/refactoring-handoff.md` | **Wave 3**(engine↔runner 통합 + 크래시복구)·**Wave 4**(메뉴정리) = 본 문서 **TD-02 / TD-05 / TD-13 / TD-04** 와 동일 영역. 세부 계획·골든스냅샷 회귀 기법은 handoff가 원천. |
+| `docs/refactoring-handoff.md` | **Wave 3**(engine↔runner)·**Wave 4**(메뉴정리). TD-02/05 데이터 결함은 2026-07-25 선조치됨 — Wave 3 본체는 여전히 **TD-04 / TD-13**. 골든 스냅샷 기법은 handoff가 원천. |
 | `docs/parallel-automation-handoff.md` | 병렬 안정화·open items. 본 문서 **TD-07 / LV-4 / LV-5** 참조. |
 | `src/automation/wehago/PROGRESS.md` | 도메인 진행 + `## 다음 단계 TODO`(대부분 MVP 시절, 상당수 완료). 미완료만 **LV-5**로 인용. |
-| `src/automation/hometax/PROGRESS.md` | 제출 플로우 완료·라이브 검증(2026-07-17). **Phase 10 `enabled=True`**. 남은 TODO: 접수증 저장·신고내역 다운로드(Phase 11 연계). ⚠ **8행의 CDP 포트 `9222` 기재는 stale**(실제 9223) — TD-12. |
+| `src/automation/hometax/PROGRESS.md` | 제출 플로우 완료·라이브 검증(2026-07-17). **Phase 10 `enabled=True`**. 남은 TODO: 접수증 저장·신고내역 다운로드. ⚠ 포트 `9222` 오기 — TD-12. |
+| `src/automation/wetax/PROGRESS.md` | Phase 13 제출·다건·안전 가드 **완료**(2026-07-25). 구조 부채 아님. 제품 잔여: 오류 N건 정책·일괄목록/접수번호. |
 | `GUIDE.md` (§risk 계열) | 기술 문서 내 임베디드 리스크. 본 문서가 상위 레지스터. |
 
 ---
@@ -193,16 +198,23 @@
 |---|---|---|
 | 2026-07-16 | `ad483f8` | 최초 작성 (v1.0.3 기준, TD-01~16 + LV-1~5) |
 | 2026-07-20 | `3202b50` | **전 항목 코드 재검증 후 갱신 (v1.0.5 기준)** — 아래 참조 |
-| 2026-07-25 | (옵션 A) | **TD-05·TD-10·TD-02 ✅**, **TD-17 🟦** — clients portal 스코프, mark_crashed(portal), _reset_batch 복구 친화. 테스트 `test_batch_portal_scope` / refresh portal isolation. 위택스 제출·안전 리팩터는 구조 부채 외 별도 완료. |
+| 2026-07-25 | `6484692` | **옵션 A 완료·세션 마무리.** TD-05·TD-10·TD-02 ✅, TD-17 🟦. 커밋 `fix(batch): TD-05/17/02/10…`. 위택스 제출·안전 리팩터(`8d7ad5d`/`d024177`)는 구조 부채 외 완료. **Wave 3(옵션 B) 보류** — 위험·골든 선행은 handoff §0/§3 및 아래 “옵션 B 위험” 참고. |
 
-**2026-07-20 갱신 상세**
-- **경로 표기 전면 수정** — 이전 판은 `db.py` / `models.py` / `automation_runner.py` 처럼 `src/` 접두사가 빠져 있었다. 전 항목에 실제 경로 반영(`src/batch/db.py`, `src/ui/workers/automation_runner.py`, `src/workflows/base.py` 등).
-- **TD-01 ✅ 해결** — v1.0.5 배포로 라이브 확인(해시→복사 순서 보장, sha256 3중 일치).
-- **TD-17 신규 등록** — 무스코프 `DELETE FROM clients` 가 TD-05 외 2경로 더 존재.
-- **정정된 서술** — TD-06(1,077→**1,124줄**, Repository 4→**3종**) · TD-07(병렬 2→**3 CLI**) · TD-08(**즉시 위험 아님**, 1줄→**2곳**) · TD-12(루트 `PROGRESS.md` **부재**, `GEMINI.md` 포트는 **정확**) · TD-16(중복 dict 위치가 `settings_dialog.py` 아닌 **runner**).
-- **범례 변경** — `✅`(검증됨)/해결 혼동 제거를 위해 **상태**와 **검증** 컬럼 분리.
-- **TD-02/03/04/05/09/10/11/13/14/15 는 줄번호까지 이전 판 그대로 유효**(드리프트 없음).
-- **LV-3 부분 해소 가능성** 기록(`cfb501c` 라이브 실측).
+### 옵션 B (Wave 3) 보류 사유 (2026-07-25)
+
+| 위험 | 설명 |
+|------|------|
+| 실행 경로 전면 변경 | runner 인라인 잡 루프 → `engine.run(hooks=)` — 전 Phase 영향 |
+| 골든 미캡처 | `scripts/capture_golden.py` 기준선 없음 — 동작 보존 객관 검증 불가 |
+| 체감 동작 변화 가능 | 크래시 복구·partial step 리셋이 살아나면 “항상 처음부터” UX와 달라질 수 있음 |
+| 범위 | `engine.py` + `automation_runner.py`(1300+줄) 훅(stop/pause/page_alive/human_break) |
+| 선택건 비대칭 | `start_selected_clients`/NoopStateManager 는 의도적으로 미통합 |
+| A와 겹침 | `_reset_batch` / mark_crashed 를 Wave 3 에서 재조정할 수 있음 |
+
+**재개 조건:** Phase 1–3 dry-run 골든 baseline → engine hooks + `tests/test_engine.py` 그린 → runner 교체 → compare + GUI 스모크.
+
+**2026-07-20 갱신 상세** (이력 보존)
+- 경로 표기 전면 수정, TD-01 ✅, TD-17 신규, 범례 상태/검증 분리 등.
 
 ---
 

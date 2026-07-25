@@ -670,13 +670,18 @@ mousemove(detail=0, buttons=0) → [30~80ms] → click(1) → [30~80ms] → clic
 
 ## 10. 리팩토링 TODO
 
-> 2026-06-12 commit `6d428ec`에서 Step 1~5, 8 완료. 아래 항목은 별도 PR로 진행 예정.
+> **단일 진실표:** `docs/TECH_DEBT.md` (TD-xx / LV-xx).  
+> **Wave 계획:** `docs/refactoring-handoff.md` (Wave 0–2 완료, Wave 3 보류, Wave 4 pending).  
+> 2026-07-25: 옵션 A(TD-05/17/02/10) 완료. Wave 3(engine↔runner)는 골든 미캡처·실행 경로 위험으로 보류.
 
-### TODO-1: `batch/db.py` 분할 (1,112줄)
-- `db.py` → `queries.py`(~500줄) + 슬림 `db.py`(~400줄 + 재export)
-- DB 레이어 전체에 영향 → 별도 검증 필요
+### 다음에 손대기 좋은 것 (요약)
+| 우선 | 항목 | 비고 |
+|------|------|------|
+| 다음 구조 | TD-04 / TD-13 Wave 3 | **골든 baseline 선행 필수** |
+| 저위험 | Wave 4 (WEHAGO preamble, NPS tabs 등) | 동작 보존 |
+| 구조 | TD-03 `db.py` 분할, TD-06 MainWindow | 동작 보존 |
+| 정리 | TD-12 문서, TD-14 sys.path, TD-16 데드코드 | LOW |
 
-### TODO-2: `sys.path.insert` import 정리
-- 여러 파일에서 반복: `sys.path.insert(0, os.path.abspath(...))`
-- `pyproject.toml` 또는 `src/__init__.py`에서 중앙화
-- 전체 모듈에 분산되어 있어 광범위 테스트 필요
+### 참고 (구 TODO — TECH_DEBT 로 이관)
+- `batch/db.py` 분할 → **TD-03**
+- `sys.path.insert` 정리 → **TD-14**

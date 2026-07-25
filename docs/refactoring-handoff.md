@@ -2,7 +2,8 @@
 
 > **목적:** 이 문서는 원천징수자동화 리팩토링을 **다른 세션에서 그대로 이어**할 수 있도록, 현재 위치·핵심 결정·남은 작업(Wave 3/4)·골든 스냅샷 회귀 방법을 자립적으로 정리한다. 코드를 수정하려면 먼저 이 문서 전체를 읽을 것.
 >
-> **작성 시점:** 2026-06-20. Wave 0-2 완료·push·E2E 검증 완료. Wave 3/4 pending.
+> **작성 시점:** 2026-06-20. Wave 0-2 완료·push·E2E 검증 완료. Wave 3/4 pending.  
+> **갱신:** 2026-07-25 — 데이터 결함 옵션 A 완료(`6484692`). Wave 3 **의도적 보류**. 위택스 Phase 13 제출·안전 리팩터 완료. 상세 부채 표는 `docs/TECH_DEBT.md`.
 
 ---
 
@@ -13,11 +14,13 @@
 | 0 | ✅ 완료(push) | pytest 인프라 + BatchEngine 단위테스트 + 골든 스냅샷 스캐폴드 | - |
 | 1 | ✅ 완료(push) | 데드코드 7종 제거(−2,488줄) + 위생 + 문서 동기화 | - |
 | 2 | ✅ 완료(push) | phase_id 매직넘버 → PhaseCapability 메타데이터화 | - |
-| **3** | ⏳ pending | **engine↔runner 통합 + 크래시 복구 DB 복원** | 🔴 높음 (실행 경로 변경) |
+| **A** | ✅ 2026-07-25 | TD-05/17/02/10 — clients portal 스코프, mark_crashed(portal), `_reset_batch` 복구 친화 | 중 (단위테스트 고정) |
+| **3** | ⏳ **보류** | **engine↔runner 통합 + 크래시 복구 DB 복원** | 🔴 높음 (실행 경로 변경) |
 | **4** | ⏳ pending | 메뉴별 구조 정리(동작 보존) | 🟡 중간 (자동화 코드 수정) |
 
-- Wave 0-2는 서브에이전트 E2E 검증(4에이전트 전원 PASS)으로 **기능 무결 확정**. 결정적 증거: `git diff 8560743..HEAD --stat src/automation/ src/batch/` = 자동화 플로우/데이터 레이어 **0행 수정**.
-- Phase 4-8은 현재 UI 잠금 상태(`ui_locked=True`). 잠금 해제는 사용자 별도 지시 전까지 유지.
+- Wave 0-2는 서브에이전트 E2E 검증(4에이전트 전원 PASS)으로 **기능 무결 확정**.
+- **2026-07-25 세션 마무리:** 옵션 A push 후 Wave 3(옵션 B)는 위험 검토만 하고 **구현 착수하지 않음**. 골든 baseline 여전히 미캡처.
+- 위택스(Phase 13) 제출·다건·안전 가드는 본 Wave와 별도 트랙으로 완료(`8d7ad5d`, `d024177`).
 
 ---
 
@@ -181,16 +184,20 @@ step 0(`navigate_to_wehago_main`) + step 1(`goto_salary_page`)이 4개 워크플
 
 ## 6. 이어하기 가이드 (fresh 세션 첫 단계)
 
-1. **본 문서(`docs/refactoring-handoff.md`) 전체 읽기.**
+1. **`docs/TECH_DEBT.md` + 본 문서 전체 읽기** (부채 우선순위 SSOT는 TECH_DEBT).
 2. 현재 상태 확인:
    ```bash
-   git log --oneline -7                      # Wave 0-2 커밋 확인
-   PYTHONUTF8=1 python -m pytest tests/ -q   # 8/8 통과 확인(기준선)
+   git log --oneline -7
+   # 기대: 6484692 (옵션 A), d024177/8d7ad5d (위택스) 근처
+   PYTHONUTF8=1 python -m pytest tests/test_batch_portal_scope.py tests/test_engine.py tests/test_refresh_preserve_mgmt.py -q
    ```
 3. **진행 분기 선택:**
-   - **안전 경로:** Wave 4(§4)부터 — 동작 보존, 단위테스트/mock + Phase 2·3 dry-run으로 검증. 각 항목별 커밋.
-   - **구조 통합:** Wave 3(§3) — **반드시 골든 기준선(§2.3) 먼저 캡처**(사용자 dry-run, Phase 1-3) 후 진행.
-4. 각 Wave 후: `pytest` + (Wave 3/4는) dry-run 재캡처→`compare` 회귀 확인 + 서브에이전트 E2E 재검증 + 커밋.
+   - **권장 안전 경로:** Wave 4(§4) — 동작 보존 추출(WEHAGO preamble, NPS tabs 등).
+   - **구조 통합 Wave 3(§3):** 사용자 명시 승인 + **골든 기준선(§2.3) 필수**.  
+     위험: 전 Phase 실행 경로 변경, 선택건 경로 비대칭, A에서 손댄 `_reset_batch`/mark_crashed 재조정 가능.  
+     상세는 `TECH_DEBT.md` §9 “옵션 B 보류 사유”.
+   - **데이터 결함(옵션 A):** ✅ 완료 — 재작업 불필요(TD-17 main “모두 삭제” UX만 잔여).
+4. 각 Wave 후: `pytest` + (Wave 3/4는) dry-run 재캡처→`compare` + 커밋.
 5. **기능 절대 건드리지 말 것**(결정: 동작 보존). 동작 변경은 §5 별도 후속으로만.
 
 ### 메모리 참조 (CLAUDE memory 관련)
