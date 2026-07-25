@@ -282,15 +282,19 @@ async def click_convert_file(
         result_out.clear()
         result_out.update(summary)
 
-    # 이미 변환 결과(M32) 이면 성공으로 간주 (재시도·스킵 경로)
+    # 이미 M32 면 이전 수임처 검증 잔존 가능 → M31 재진입 후 변환 (생략 금지)
     try:
         url0 = page.url or ""
         if ACCOUNTING_CONVERT_RESULT_PATH in url0:
-            _log("  [WETAX form] 이미 서식검증 화면(M32) — 변환 생략")
-            await _fill_result()
-            return True
-    except Exception:
-        pass
+            _log("  [WETAX form] 이미 서식검증 화면(M32) — M31 재진입 후 변환")
+            from src.automation.wetax._navigation import ensure_upload_form
+            back = await ensure_upload_form(page, logger=_log)
+            if not back:
+                _log("  [WETAX form] M32→M31 재진입 실패 — 변환 중단")
+                return False
+    except Exception as e:
+        _log(f"  [WETAX form] M32 선처리 실패: {e}")
+        return False
 
     loc = page.locator(sel)
     try:
@@ -299,7 +303,7 @@ async def click_convert_file(
         _log(f"  [WETAX form] 파일변환하기({sel}) 미표시: {e}")
         return False
 
-    # W2: M31 URL 이거나 버튼 라벨이 변환 — 제출 라벨만 있으면 거부
+    # W2: M31 URL + 변환 라벨 필수. 실패 시 클릭 금지 (hard-fail).
     try:
         url = page.url or ""
         label = (await loc.first.inner_text() or "").replace("\n", " ").strip()
@@ -315,24 +319,35 @@ async def click_convert_file(
                 f"(url={url!r} label={label!r})"
             )
             return False
-        if not on_m31 and not looks_convert:
+        if not looks_convert:
             _log(
-                f"  [WETAX form] 변환 버튼이 아님 (url={url!r} label={label!r})"
+                f"  [WETAX form] 변환 라벨 아님 — 변환 거부 "
+                f"(url={url!r} label={label!r})"
+            )
+            return False
+        if not on_m31:
+            _log(
+                f"  [WETAX form] M31 아님 — 변환 거부 (url={url!r})"
             )
             return False
     except Exception as e:
-        _log(f"  [WETAX form] 변환 버튼 라벨 확인 실패(계속 진행): {e}")
+        _log(f"  [WETAX form] 변환 버튼 라벨 확인 실패 — 중단: {e}")
+        return False
 
     try:
         await loc.first.scroll_into_view_if_needed(timeout=5000)
     except Exception:
         pass
 
-    _log("  [WETAX form] 파일변환하기 클릭")
+    _log("  [WETAX form] [step] 파일변환하기 클릭")
     clicked = False
     # 클릭 구간에만 confirm 오버라이드 → finally 복원 후 M32 대기
     async with accept_native_dialogs(
-        page, accept=True, message_substr="검증", logger=_log,
+        page,
+        accept=True,
+        message_substr="검증",
+        on_mismatch="reject",
+        logger=_log,
     ):
         try:
             await loc.first.click(timeout=8000, force=True)
@@ -375,8 +390,8 @@ async def click_convert_file(
             if ACCOUNTING_CONVERT_RESULT_PATH in url:
                 summary = await _wait_convert_summary(page, logger=_log)
                 _log(
-                    f"  [WETAX form] 파일변환 완료 → 서식검증 화면 "
-                    f"(정상={summary.get('ok')} 오류={summary.get('err')})"
+                    f"  [WETAX form] [step] 파일변환 완료 → M32 "
+                    f"정상={summary.get('ok')} 오류={summary.get('err')}"
                 )
                 await _fill_result(summary)
                 return True
@@ -391,8 +406,8 @@ async def click_convert_file(
                 # 폼 전환 직후 표가 아직 안 그려질 수 있음 → 요약 폴링
                 summary = await _wait_convert_summary(page, logger=_log)
                 _log(
-                    f"  [WETAX form] 파일변환 완료 (폼 전환) "
-                    f"(정상={summary.get('ok')} 오류={summary.get('err')})"
+                    f"  [WETAX form] [step] 파일변환 완료 (폼 전환) "
+                    f"정상={summary.get('ok')} 오류={summary.get('err')}"
                 )
                 await _fill_result(summary)
                 return True
@@ -478,13 +493,14 @@ async def _wait_convert_summary(
 
 
 async def _submit_success_signal(page) -> dict | None:
-    """제출 후 성공 시그널 판정. 성공이면 메타 dict, 아니면 None.
+    """제출 후 성공 시그널 — **strict**: M33 제출결과 화면만 인정.
 
-    라이브(2026-07) 가정 후보:
-      - M33 제출결과확인 URL
-      - M32 이탈 후 M31 업로드 폼 복귀 (다수임처 루프 전제 리프레시)
-      - 본문에 접수/제출완료 등 키워드
-      - 좌측 단계 '제출결과확인' 활성
+    라이브(2026-07-25) 확정:
+      - URL `B070101M33.do` / path 에 M33
+      - (보조) 동일 결과 화면 본문 「일괄신고」+「제출처리」
+
+    제거된 느슨한 휴리스틱 (오탐 방지):
+      left_m32, m31+filePw, 광범위 키워드, step3 class 추정
     """
     try:
         data = await page.evaluate(
@@ -492,32 +508,8 @@ async def _submit_success_signal(page) -> dict | None:
               const url = location.href || '';
               const t = ((document.body && document.body.innerText) || '')
                 .replace(/\\s+/g, ' ').trim();
-              const hasPw = !!document.getElementById('filePw');
-              const btn = document.getElementById('btn_next');
-              const btnText = btn
-                ? (btn.innerText || btn.textContent || '').replace(/\\s+/g, ' ').trim()
-                : '';
-              const keywords = [
-                '제출이 완료', '제출완료', '정상적으로 제출', '신고가 접수',
-                '접수번호', '접수가 완료', '신고완료', '처리가 완료',
-              ];
-              const hit = keywords.find(k => t.includes(k)) || null;
-              // 좌측 단계 3 활성 휴리스틱
-              let step3 = false;
-              const nodes = document.querySelectorAll('li, div, span, a, button');
-              for (const el of nodes) {
-                const s = (el.innerText || '').replace(/\\s+/g, ' ').trim();
-                if (s.includes('제출결과확인') && s.length < 40) {
-                  const cls = (el.className || '').toString();
-                  if (/active|on|current|selected|ing/i.test(cls)) {
-                    step3 = true; break;
-                  }
-                }
-              }
-              return {
-                url, hasPw, btnText, hit, step3,
-                bodyHead: t.slice(0, 200),
-              };
+              const batchMsg = t.includes('일괄신고') && t.includes('제출처리');
+              return { url, batchMsg, bodyHead: t.slice(0, 160) };
             }"""
         )
     except Exception:
@@ -525,50 +517,24 @@ async def _submit_success_signal(page) -> dict | None:
     if not isinstance(data, dict):
         return None
     url = data.get("url") or ""
-    # M33 등 결과 화면
-    if ACCOUNTING_SUBMIT_RESULT_PATH in url or "M33" in url:
+    # 1순위: M33 URL (라이브 확정)
+    if ACCOUNTING_SUBMIT_RESULT_PATH in url or "/B070101M33" in url or "M33.do" in url:
         return {
             "reason": "m33_url",
             "url": url,
-            "hit": data.get("hit"),
+            "hit": "batch" if data.get("batchMsg") else None,
         }
-    # 키워드
-    if data.get("hit"):
-        return {
-            "reason": "keyword",
-            "url": url,
-            "hit": data.get("hit"),
-        }
-    if data.get("step3"):
-        return {
-            "reason": "step3_active",
-            "url": url,
-            "hit": data.get("hit"),
-        }
-    # M32 이탈 → M31 업로드 폼 (제출 후 리프레시 가정)
-    if (
-        ACCOUNTING_FILE_REPORT_PATH in url
-        and ACCOUNTING_CONVERT_RESULT_PATH not in url
-        and data.get("hasPw")
-    ):
-        return {
-            "reason": "m31_after_submit",
-            "url": url,
-            "hit": data.get("hit"),
-        }
-    # M32 가 아닌 위택스 하위 화면 (경로 변경)
-    if (
-        "wetax.go.kr" in url
-        and ACCOUNTING_CONVERT_RESULT_PATH not in url
-        and ACCOUNTING_FILE_REPORT_PATH not in url
-        and "/etr/" in url
-    ):
-        return {
-            "reason": "left_m32",
-            "url": url,
-            "hit": data.get("hit"),
-            "bodyHead": data.get("bodyHead"),
-        }
+    # 2순위: 결과 본문 패턴이 있고 업로드/서식검증 URL 이 아닐 때만
+    # (경로 변형 대비 — M31/M32 에서는 인정하지 않음)
+    if data.get("batchMsg"):
+        if ACCOUNTING_FILE_REPORT_PATH in url or ACCOUNTING_CONVERT_RESULT_PATH in url:
+            return None
+        if "wetax.go.kr" in url:
+            return {
+                "reason": "batch_result_body",
+                "url": url,
+                "hit": "일괄신고 제출처리",
+            }
     return None
 
 
@@ -625,7 +591,7 @@ async def click_submit_report(
         _log(f"  [WETAX form] 제출하기({sel}) 미표시: {e}")
         return False
 
-    # 라벨·URL 가드: 변환 버튼이면 거부
+    # 라벨·URL 가드 hard-fail: M32 + 제출 라벨 필수
     try:
         url = page.url or ""
         label = (await loc.first.inner_text() or "").replace("\n", " ").strip()
@@ -641,24 +607,35 @@ async def click_submit_report(
                 f"(url={url!r} label={label!r})"
             )
             return False
-        if not on_m32 and not looks_submit:
+        if not looks_submit:
             _log(
-                f"  [WETAX form] 제출 버튼이 아님 (url={url!r} label={label!r})"
+                f"  [WETAX form] 제출 라벨 아님 — 제출 거부 "
+                f"(url={url!r} label={label!r})"
+            )
+            return False
+        if not on_m32:
+            _log(
+                f"  [WETAX form] M32 아님 — 제출 거부 (url={url!r})"
             )
             return False
     except Exception as e:
-        _log(f"  [WETAX form] 제출 라벨 확인 실패(계속 진행): {e}")
+        _log(f"  [WETAX form] 제출 라벨 확인 실패 — 중단: {e}")
+        return False
 
     try:
         await loc.first.scroll_into_view_if_needed(timeout=5000)
     except Exception:
         pass
 
-    _log("  [WETAX form] 제출하기 클릭")
+    _log("  [WETAX form] [step] 제출하기 클릭")
     clicked = False
-    # 제출 confirm 문구 미확정 → 전체 수락. 블록 종료 시 반드시 복원.
+    # 라이브 confirm: "제출 하시겠습니까?" — 그 외 confirm 은 거부(오제출 방지)
     async with accept_native_dialogs(
-        page, accept=True, message_substr=None, logger=_log,
+        page,
+        accept=True,
+        message_substr="제출",
+        on_mismatch="reject",
+        logger=_log,
     ):
         try:
             await loc.first.click(timeout=8000, force=True)
@@ -684,7 +661,7 @@ async def click_submit_report(
         try:
             msgs = await page.evaluate("() => window.__wetax_confirm_msgs || []")
             if msgs:
-                _log(f"  [WETAX form] submit confirm/alert: {msgs[0][:100]}")
+                _log(f"  [WETAX form] [step] submit confirm: {msgs[0][:100]}")
                 if result_out is not None:
                     result_out.setdefault("confirm_msgs", list(msgs))
         except Exception:
@@ -693,7 +670,7 @@ async def click_submit_report(
     if not clicked:
         return False
 
-    # 성공 시그널 대기 (네비게이션으로 dialog 복원 실패는 정상)
+    # 성공 시그널 대기 (네비게이션으로 dialog 복원 실패는 정상) — M33 strict
     deadline = time.monotonic() + timeout_s
     last_url = ""
     while time.monotonic() < deadline:
@@ -702,7 +679,7 @@ async def click_submit_report(
             sig = await _submit_success_signal(page)
             if sig:
                 _log(
-                    f"  [WETAX form] 제출 성공 시그널 "
+                    f"  [WETAX form] [step] 제출 성공 "
                     f"reason={sig.get('reason')} url={sig.get('url')}"
                 )
                 if result_out is not None:
@@ -720,7 +697,6 @@ async def click_submit_report(
         await asyncio.sleep(0.5)
 
     _log(f"  [WETAX form] 제출 후 성공 시그널 타임아웃 url={last_url!r}")
-    # 타임아웃이어도 페이지 스냅샷 남김
     if result_out is not None:
         try:
             snip = await page.evaluate(
@@ -740,7 +716,3 @@ async def click_submit_report(
             }
         )
     return False
-
-
-# 하위 호환 별칭
-_convert_result_summary = get_convert_result_summary

@@ -1208,45 +1208,19 @@ class AutomationRunner(AsyncWorker):
         return False
 
     async def _wetax_logged_in(self) -> bool:
-        """위택스 로그인 여부 판정.
+        """위택스 로그인 여부 — src.automation.wetax._session 공통 판정."""
+        from src.automation.wetax._session import any_page_logged_in
 
-        라이브 확인(2026-07):
-        - main: a.btnLogout + 로그인연장 타이머
-        - 회계파일신고 등 하위 화면: btnLogout 이 DOM/가시성에서 빠질 수 있음
-          → **로그인연장** 버튼/텍스트도 로그인 시그널로 인정
-        """
-        for pg in list(self._context.pages):
-            try:
-                if "wetax.go.kr" not in pg.url:
-                    continue
-                ok = await asyncio.wait_for(pg.evaluate("""() => {
-                    const vis = (el) => {
-                        if (!el) return false;
-                        const s = getComputedStyle(el);
-                        if (s.display === 'none' || s.visibility === 'hidden') return false;
-                        const r = el.getBoundingClientRect();
-                        return r.width > 0 && r.height > 0;
-                    };
-                    // 1) 헤더 로그아웃
-                    const btn = document.querySelector('a.btnLogout');
-                    if (vis(btn)) return true;
-                    // 2) 로그인연장 타이머/버튼 (하위 메뉴에서도 유지 — 라이브 B070101M31)
-                    const all = document.querySelectorAll('a, button, span, div, li');
-                    for (const el of all) {
-                        if (!vis(el)) continue;
-                        const txt = (el.value || el.innerText || el.title || '')
-                            .replace(/\\s+/g, ' ').trim();
-                        if (txt === '로그아웃') return true;
-                        if (txt === '로그인연장' || txt.includes('로그인연장')) return true;
-                    }
-                    return false;
-                }"""), timeout=5)
-                if ok:
-                    self._page = pg
-                    return True
-            except Exception:
-                continue
-        return False
+        def _set(pg):
+            self._page = pg
+
+        try:
+            return await asyncio.wait_for(
+                any_page_logged_in(self._context, prefer_set_page=_set),
+                timeout=5,
+            )
+        except Exception:
+            return False
 
     async def _wait_for_login_wehago(self) -> bool:
         """WEHAGO 로그인 대기"""

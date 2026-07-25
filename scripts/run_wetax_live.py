@@ -1,17 +1,17 @@
 """위택스 Phase 13 라이브 단건 실행 (GUI 없이 코드 경로).
 
-주식회사 드류 등 수임처 1건: 로그인 → 회계파일신고 → 전화·비번·파일 → 변환
-→ 제출(현재 _STUB_SUBMIT=True 이면 제출 생략 후 M31 복귀).
+수임처 1건: 로그인 → 회계파일신고 → 전화·비번·파일 → 변환 → 제출(M33).
+운영 기본은 실제 제출. 스텁만 필요 시 WETAX_STUB_SUBMIT=1.
 
 사용 예:
   python scripts/run_wetax_live.py ^
     --client "주식회사 드류" --year 2026 --month 7 ^
     --password "파일비번" --phone "010-1234-5678"
 
-  # 서식검증(M32)에 멈춰 정상/오류 확인 (M31 강제 복귀 안 함)
+  # 서식검증/결과 화면에 멈춰 M31 복귀 안 함
   python scripts/run_wetax_live.py ... --stay-m32
 
-환경변수 대안: WETAX_PASSWORD, WETAX_PHONE
+환경변수: WETAX_PASSWORD, WETAX_PHONE, WETAX_STUB_SUBMIT
 Chrome CDP 9223. 전자세금용 공인인증서 로그인은 Human-in-the-loop.
 """
 from __future__ import annotations
@@ -77,45 +77,15 @@ async def _find_wetax_page(browser):
     return page, ctx
 
 
-async def _wetax_logged_in(page) -> bool:
-    try:
-        if "wetax.go.kr" not in (page.url or ""):
-            return False
-        if "logout.do" in (page.url or ""):
-            return False
-        return await page.evaluate(
-            """() => {
-              const vis = (el) => {
-                if (!el) return false;
-                const s = getComputedStyle(el);
-                if (s.display === 'none' || s.visibility === 'hidden') return false;
-                const r = el.getBoundingClientRect();
-                return r.width > 0 && r.height > 0;
-              };
-              const btn = document.querySelector('a.btnLogout');
-              if (vis(btn)) return true;
-              const all = document.querySelectorAll('a, button, span, div, li');
-              for (const el of all) {
-                if (!vis(el)) continue;
-                const txt = (el.value || el.innerText || el.title || '')
-                  .replace(/\\s+/g, ' ').trim();
-                if (txt === '로그아웃' || txt === '로그인연장' || txt.includes('로그인연장'))
-                  return true;
-              }
-              return false;
-            }"""
-        )
-    except Exception:
-        return False
-
-
 async def _wait_login(page, max_sec: int) -> bool:
+    from src.automation.wetax._session import is_logged_in
+
     print(
         f"[WETAX] 로그인 대기 중... 전자세금용 공인인증서로 로그인해 주세요. "
         f"(최대 {max_sec}s)"
     )
     for i in range(max(1, max_sec // 5)):
-        if await _wetax_logged_in(page):
+        if await is_logged_in(page):
             print(f"[WETAX] 로그인 확인 ({(i + 1) * 5}s) url={page.url}")
             return True
         if i % 6 == 5:
@@ -137,9 +107,10 @@ async def main() -> int:
 
     from src.automation.wetax._form import find_jitax_encrypted_file
     from src.automation.wetax._common import dismiss_popups, mask_phone
+    from src.automation.wetax._session import is_logged_in
     from src.batch.state import NoopStateManager
     from src.utils.chrome_cdp import CDP_URL, check_cdp_available, launch_chrome
-    from src.workflows.wetax_local_tax import WetaxLocalTaxWorkflow, _STUB_SUBMIT
+    from src.workflows.wetax_local_tax import WetaxLocalTaxWorkflow, resolve_stub_submit
 
     efile = find_jitax_encrypted_file(
         args.client, year=args.year, month=args.month
@@ -153,8 +124,9 @@ async def main() -> int:
         return 2
     print(f"[WETAX] client={args.client!r} period={args.year}-{args.month:02d}")
     print(f"[WETAX] efile={efile}")
+    stub = resolve_stub_submit()
     print(
-        f"[WETAX] phone={mask_phone(phone)} stub_submit={_STUB_SUBMIT} "
+        f"[WETAX] phone={mask_phone(phone)} stub_submit={stub} "
         f"stay_on_m32={args.stay_m32}"
     )
 
@@ -206,7 +178,7 @@ async def main() -> int:
         except Exception as e:
             print(f"[WETAX] main.do 경고: {e}")
 
-        if not await _wetax_logged_in(page):
+        if not await is_logged_in(page):
             ok = await _wait_login(page, args.login_timeout)
             if not ok:
                 print("FAIL: 로그인 타임아웃")
@@ -284,14 +256,14 @@ async def main() -> int:
 
         if ok:
             print("\n=== WETAX LIVE: SUCCESS ===")
-            if _STUB_SUBMIT and args.stay_m32:
-                print("  (제출 스텁 · stay_on_m32 — 서식검증 화면 유지, 제출 안 함)")
-            elif _STUB_SUBMIT:
-                print("  (제출은 스텁 — 변환·M31 복귀까지. 실제출은 _STUB_SUBMIT=False 후)")
+            if stub and args.stay_m32:
+                print("  (제출 스텁 · stay_on_m32 — 서식검증 화면 유지)")
+            elif stub:
+                print("  (제출 스텁 — 변환·M31 복귀. 실제출은 WETAX_STUB_SUBMIT 미설정)")
             elif args.stay_m32:
-                print("  (제출 실클릭 · stay_on_m32 — 결과 화면 유지, M31 복귀 안 함)")
+                print("  (제출 실클릭 · stay_on_m32 — 결과 화면 유지)")
             else:
-                print("  (제출 실클릭 · 성공 후 M31 복귀 시도)")
+                print("  (제출 실클릭 · M31 복귀)")
             return 0
         print("\n=== WETAX LIVE: FAIL ===")
         return 1

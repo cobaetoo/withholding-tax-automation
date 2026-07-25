@@ -3,7 +3,7 @@
 드류 전자신고 파일을 여러 수임처 폴더에 복제해 둔 뒤, 이름만 다른 수임처처럼
 순차 run_single 한다.
 
-기본: 제출 스텁(WETAX_STUB_SUBMIT=1) — 동일 파일 중복 실제출 방지.
+기본: 제출 스텁 (run_single stub_submit=True) — 동일 파일 중복 실제출 방지.
   전화·비번 재입력 → 파일 교체 → 변환 → M31 복귀 루프 검증용.
 실제출: --real-submit (동일 세무 데이터 N회 제출 위험 있음)
 
@@ -84,42 +84,12 @@ async def _find_wetax_page(browser):
     return await ctx.new_page(), ctx
 
 
-async def _wetax_logged_in(page) -> bool:
-    try:
-        if "wetax.go.kr" not in (page.url or ""):
-            return False
-        if "logout.do" in (page.url or ""):
-            return False
-        return await page.evaluate(
-            """() => {
-              const vis = (el) => {
-                if (!el) return false;
-                const s = getComputedStyle(el);
-                if (s.display === 'none' || s.visibility === 'hidden') return false;
-                const r = el.getBoundingClientRect();
-                return r.width > 0 && r.height > 0;
-              };
-              const btn = document.querySelector('a.btnLogout');
-              if (vis(btn)) return true;
-              const all = document.querySelectorAll('a, button, span, div, li');
-              for (const el of all) {
-                if (!vis(el)) continue;
-                const txt = (el.value || el.innerText || el.title || '')
-                  .replace(/\\s+/g, ' ').trim();
-                if (txt === '로그아웃' || txt === '로그인연장' || txt.includes('로그인연장'))
-                  return true;
-              }
-              return false;
-            }"""
-        )
-    except Exception:
-        return False
-
-
 async def _wait_login(page, max_sec: int) -> bool:
+    from src.automation.wetax._session import is_logged_in
+
     print(f"[MULTI] 로그인 대기... 전자세금용 공인인증서 (최대 {max_sec}s)")
     for i in range(max(1, max_sec // 5)):
-        if await _wetax_logged_in(page):
+        if await is_logged_in(page):
             print(f"[MULTI] 로그인 확인 ({(i + 1) * 5}s)")
             return True
         if i % 6 == 5:
@@ -136,29 +106,22 @@ async def main() -> int:
         print("FAIL: --password / --phone 필요")
         return 2
 
-    # 제출 스텁 토글 (모듈 로드 전 env 도 지원)
-    if not args.real_submit:
-        os.environ["WETAX_STUB_SUBMIT"] = "1"
-
     from src.automation.wetax._form import find_jitax_encrypted_file
     from src.automation.wetax._common import dismiss_popups, mask_phone
     from src.batch.state import NoopStateManager
     from src.utils.chrome_cdp import CDP_URL, check_cdp_available, launch_chrome
-    import src.workflows.wetax_local_tax as wetax_wf
     from src.workflows.wetax_local_tax import WetaxLocalTaxWorkflow
 
-    if not args.real_submit:
-        wetax_wf._STUB_SUBMIT = True
-    else:
-        wetax_wf._STUB_SUBMIT = False
+    # kwargs stub_submit — 모듈 전역 패치 없이 건별 주입
+    stub_submit = not args.real_submit
 
     clients = list(args.clients)
     print(f"[MULTI] clients={clients}")
     print(
         f"[MULTI] period={args.year}-{args.month:02d} phone={mask_phone(phone)} "
-        f"stub_submit={wetax_wf._STUB_SUBMIT} real_submit={args.real_submit}"
+        f"stub_submit={stub_submit} real_submit={args.real_submit}"
     )
-    if wetax_wf._STUB_SUBMIT:
+    if stub_submit:
         print(
             "[MULTI] 제출 스텁 모드 — 변환·M31 복귀 루프만 검증 "
             "(실제출은 --real-submit)"
@@ -199,7 +162,9 @@ async def main() -> int:
         except Exception as e:
             print(f"[MULTI] main 경고: {e}")
 
-        if not await _wetax_logged_in(page):
+        from src.automation.wetax._session import is_logged_in
+
+        if not await is_logged_in(page):
             if not await _wait_login(page, args.login_timeout):
                 print("FAIL: 로그인 타임아웃")
                 return 1
@@ -234,6 +199,7 @@ async def main() -> int:
                     year=args.year,
                     month=args.month,
                     stay_on_m32=False,  # 다음 건 위해 M31 복귀
+                    stub_submit=stub_submit,
                 )
             except Exception as e:
                 print(f"[MULTI] ({i + 1}/{total}) {name} 예외: {e}")
@@ -267,7 +233,7 @@ async def main() -> int:
         flag = "OK" if r.get("ok") else "FAIL"
         print(f"  [{flag}] {r.get('name')} {r.get('error', '')}")
     n_ok = sum(1 for r in results if r.get("ok"))
-    print(f"  {n_ok}/{len(clients)} success  stub={wetax_wf._STUB_SUBMIT}")
+    print(f"  {n_ok}/{len(clients)} success  stub={stub_submit}")
 
     if n_ok == len(clients):
         print("\n=== WETAX MULTI: ALL PASS ===")

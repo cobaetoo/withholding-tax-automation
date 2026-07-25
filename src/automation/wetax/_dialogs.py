@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Callable
+from typing import AsyncIterator, Callable, Literal
 
 from src.automation.wetax._common import log
+
+OnMismatch = Literal["orig", "reject", "accept"]
 
 
 @asynccontextmanager
@@ -14,6 +16,7 @@ async def accept_native_dialogs(
     *,
     accept: bool = True,
     message_substr: str | None = None,
+    on_mismatch: OnMismatch = "orig",
     logger: Callable[[str], None] | None = None,
 ) -> AsyncIterator[None]:
     """window.confirm / alert 을 잠시 가로채고, 블록 종료 시 반드시 복원한다.
@@ -23,15 +26,19 @@ async def accept_native_dialogs(
     복원하지 않으면 이후 확인창이 전부 자동 수락되어 오제출 위험이 있다.
 
     Args:
-        accept: confirm 반환값 (True=확인, False=취소)
-        message_substr: 지정 시 해당 부분문자열이 있을 때만 accept 값 반환,
-            없으면 반대값(취소 쪽) 반환. None 이면 항상 accept.
+        accept: confirm 반환값 (True=확인, False=취소) — substr 일치 시
+        message_substr: 지정 시 해당 부분문자열이 있을 때만 accept 적용.
+            None 이면 모든 confirm 에 accept 적용.
+        on_mismatch: substr 불일치 시 동작
+            - orig: 원본 confirm 위임 (블로킹 가능 — 기본, 하위호환)
+            - reject: False(취소) 반환 — 제출 경로 권장
+            - accept: True 반환
     """
     _log = logger or log
-    # 원본 함수 참조를 페이지에 백업 후 오버라이드
+    mismatch = on_mismatch if on_mismatch in ("orig", "reject", "accept") else "orig"
     try:
         await page.evaluate(
-            """({ accept, substr }) => {
+            """({ accept, substr, mismatch }) => {
               if (!window.__wetax_dialog_orig) {
                 window.__wetax_dialog_orig = {
                   confirm: window.confirm,
@@ -40,12 +47,12 @@ async def accept_native_dialogs(
               }
               window.__wetax_confirm_msgs = [];
               const origConfirm = window.__wetax_dialog_orig.confirm;
-              const origAlert = window.__wetax_dialog_orig.alert;
               window.confirm = (msg) => {
                 const s = String(msg || '');
                 window.__wetax_confirm_msgs.push(s);
-                // message_substr 가 있고 불일치면 원본 confirm 에 위임
                 if (substr && s.indexOf(substr) < 0) {
+                  if (mismatch === 'reject') return false;
+                  if (mismatch === 'accept') return true;
                   return origConfirm(msg);
                 }
                 return !!accept;
@@ -53,10 +60,13 @@ async def accept_native_dialogs(
               window.alert = (msg) => {
                 window.__wetax_confirm_msgs.push('ALERT:' + String(msg || ''));
               };
-              // keep refs for restore
               window.__wetax_dialog_orig._active = true;
             }""",
-            {"accept": accept, "substr": message_substr or ""},
+            {
+                "accept": accept,
+                "substr": message_substr or "",
+                "mismatch": mismatch,
+            },
         )
     except Exception as e:
         _log(f"  [WETAX dlg] confirm 오버라이드 실패: {e}")

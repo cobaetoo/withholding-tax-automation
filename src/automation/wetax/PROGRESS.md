@@ -140,8 +140,19 @@ M31·M32 하단 버튼 **동일 id `#btn_next`** — 라벨으로만 변환/제�
 - `password`, `phone` → 전체/선택건 runner → `run_single`
 - 회귀: `tests/test_wetax_gui_kwargs_passthrough.py`, `test_wetax_toolbar_fields.py`
 
+### 안전 리팩터 (2026-07-25, 기능 유지)
+| 항목 | 내용 |
+|------|------|
+| 성공 시그널 | **M33 URL strict** — left_m32 / m31+filePw / 광범위 키워드 제거 |
+| 라벨 가드 | convert/submit 라벨 확인 실패 시 **hard-fail** (클릭 안 함) |
+| confirm | 제출 `message_substr=제출` + `on_mismatch=reject` |
+| M32 early | 변환 생략 금지 → **M31 재진입 후 변환** |
+| ensure 실패 | 제출 후 M31 복귀 실패 시 **job fail** (1회 재시도) |
+| stub API | `resolve_stub_submit` / `kwargs stub_submit` (모듈 패치 불필요) |
+| 로그인 | `_session.is_logged_in` 단일화 (runner·live·multi) |
+| 로그 | `[step]` 경계 로그 표준화 |
+
 ### 변경 이력 (요약)
-- 2026-07-25: 제출 실구현 (`click_submit_report`) · `_STUB_SUBMIT` 기본 False  
-  · 표 렌더 폴링 · M33 성공 시그널 · 다건 실제출 라이브 PASS  
-  · `run_wetax_live.py` / `run_wetax_multi_live.py`
+- 2026-07-25: 안전 리팩터 PR1–6 (시그널·가드·ensure·stub kwargs·session·로그)
+- 2026-07-25: 제출 실구현 · 다건 실제출 라이브 PASS · live/multi 스크립트
 - 2026-07-24: 변환 실구현 · 안전 리팩터 · 제출 스텁 핸드오프
