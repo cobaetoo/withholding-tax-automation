@@ -232,6 +232,13 @@ def test_wetax_workflow_reads_kwargs_keys():
             out.update({"ok": 1, "err": 0, "url": "mock"})
         return True
 
+    async def fake_submit(page, **kw):
+        out = kw.get("result_out")
+        if isinstance(out, dict):
+            out.clear()
+            out.update({"reason": "mock", "url": "mock", "ok": 1, "err": 0})
+        return True
+
     async def fake_ensure(page, **kw):
         return True
 
@@ -242,6 +249,7 @@ def test_wetax_workflow_reads_kwargs_keys():
                return_value=r"C:\tmp\dummy.2"), \
          patch("src.automation.wetax._form.select_encrypted_file", fake_select), \
          patch("src.automation.wetax._form.click_convert_file", fake_convert), \
+         patch("src.automation.wetax._form.click_submit_report", fake_submit), \
          patch("src.automation.wetax._navigation.ensure_upload_form", fake_ensure):
         ok = asyncio.run(wf.run_single(
             page=MagicMock(),
@@ -255,14 +263,14 @@ def test_wetax_workflow_reads_kwargs_keys():
             month=7,
         ))
 
-    # 전화·비번 소비 후 파일선택·변환(모킹) + 제출 스텁 → True
+    # 전화·비번 소비 후 파일선택·변환·제출(모킹) → True
     assert seen["phone"] == TEST_PHONE
     assert seen["password"] == TEST_PW
     assert ok is True
 
 
 def test_wetax_multi_client_stub_advances_all():
-    """제출 스텁: 수임처 3건 연속 run_single 모두 True (파일·변환 모킹)."""
+    """수임처 3건 연속 run_single 모두 True (파일·변환·제출 모킹)."""
     import asyncio
     from src.workflows.wetax_local_tax import WetaxLocalTaxWorkflow
 
@@ -285,7 +293,14 @@ def test_wetax_multi_client_stub_advances_all():
         out = kw.get("result_out")
         if isinstance(out, dict):
             out.clear()
-            out.update({"ok": 0, "err": 0, "url": "mock"})
+            out.update({"ok": 1, "err": 0, "url": "mock"})
+        return True
+
+    async def fake_submit(page, **kw):
+        out = kw.get("result_out")
+        if isinstance(out, dict):
+            out.clear()
+            out.update({"reason": "mock", "url": "mock"})
         return True
 
     async def fake_ensure(page, **kw):
@@ -299,6 +314,7 @@ def test_wetax_multi_client_stub_advances_all():
                return_value=r"C:\tmp\dummy.2"), \
          patch("src.automation.wetax._form.select_encrypted_file", fake_select), \
          patch("src.automation.wetax._form.click_convert_file", fake_convert), \
+         patch("src.automation.wetax._form.click_submit_report", fake_submit), \
          patch("src.automation.wetax._navigation.ensure_upload_form", fake_ensure):
         for name in clients:
             state = NoopStateManager()

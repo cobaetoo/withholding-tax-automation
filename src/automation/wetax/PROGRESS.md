@@ -1,57 +1,40 @@
 # 위택스(Wetax) 자동화 진행 상황
 
-> **문서 역할:** Phase 13 구현 상태 · 라이브 검증 · **다음 세션 핸드오프**의 단일 소스.  
+> **문서 역할:** Phase 13 구현 상태 · 라이브 검증 · 핸드오프의 단일 소스.  
 > 사용자 안내는 `USER_GUIDE.md` §14, 개발 요약은 `GUIDE.md` Phase 13 과 맞춘다.
 
-## ▶ 핸드오프 / 다음에 이어서 할 일 (2026-07-24 pause)
+## ▶ 현재 상태 (2026-07-25)
 
 | 항목 | 내용 |
 |------|------|
-| **상태** | 변환까지 완료 · **제출 STUB** · pause |
-| **중단 이유** | 서식검증 **오류 없는** 전자신고 파일(`.1`/`.2`) 준비 중 |
-| **재개 트리거** | M32에서 **정상 ≥1 · 오류 0** 인 파일 1건 확보 |
-| **마지막 커밋 계열** | `c5eb4ca` 핸드오프 / `4b7d903` W10 E2E / `26214a2` 안전 리팩터 |
+| **상태** | **변환 + 제출 실구현** · 다건 루프 라이브 PASS |
+| **기본 제출** | `_STUB_SUBMIT=False` (운영). `WETAX_STUB_SUBMIT=1` 시 스텁 |
+| **게이트** | 정상 ≥1 · 오류>0 이면 제출 거부 (`require_ok=True`) |
+| **제출 성공 시그널** | M33 `B070101M33.do` · confirm `제출 하시겠습니까?` |
+| **단건 라이브** | 주식회사 드류 `20260725A103900.1` → M32 정상1 → 제출 → M33 |
+| **다건 라이브** | 드류 파일 복사 2건 연속 실제출 PASS (전화·비번 재입력 → 변환 → 제출 → M31) |
 
-### 재개 전제 체크리스트
-- [ ] `바탕화면/지방소득세전자신고_{YYYYMM}/{수임처}/` 에 **`.1` 또는 `.2`**
-- [ ] GUI 대상 연·월 = 폴더 `YYYYMM`
-- [ ] 파일 비밀번호 · 휴대전화 (GUI 툴바)
-- [ ] CDP **9223** + 위택스 **전자세금용** 공인인증서 로그인
-- [ ] 변환 후 M32: **정상 신고 내역 ≥1, 오류 0**  
-  (참고: 2026-07-24 오버루트 샘플은 납기일자 `20260810` 오류로 제출 개발에 부적합)
-
-### 재개 순서 (권장)
+### 남은 일 (선택)
 | 순 | 작업 | 메모 |
 |----|------|------|
-| 1 | 오류 0건 파일로 변환 라이브 확인 | M32 `정상 N / 오류 0` |
-| 2 | 제출 1건 **수동** 클릭 → 제출 후 URL·화면 기록 | 리프레시? 결과탭? 접수번호? |
-| 3 | `click_submit_report` 구현 | `#btn_next` + **제출** 라벨, `accept_native_dialogs` **복원 필수** |
-| 4 | `_STUB_SUBMIT` 해제 또는 설정 플래그 | `wetax_local_tax.py` |
-| 5 | 성공 판정 + 제출 후 `ensure_upload_form`(M31) | 다수임처 루프 |
-| 6 | 오류 N건 정책 (PO 결정) | 스킵 / 경고 후 다음 / 제출 시도 — **미결정** |
-| 7 | 수임처 2~3건 선택 실행 라이브 | 1건 실패 시 계속 vs 중단 — **미결정** |
-| 8 | GUIDE / USER_GUIDE / PROGRESS · 테스트 · commit | |
+| 1 | 오류 N건 정책 (PO) | 현재: 제출 거부. 스킵/경고 후 다음 미결정 |
+| 2 | 1건 실패 시 계속 vs 중단 | 선택건 runner 는 브라우저 생존 시 다음 건 계속 |
+| 3 | 일괄신고목록·접수번호 파싱 | M33 안내: 일괄신고목록에서 확인 |
+| 4 | (선택) 중간 단계 가시성 강화 | confirm 자동수락으로 UI 가 빠르게 지나감 |
 
-### 재개 시 열 파일
-| 파일 | 용도 |
-|------|------|
-| `src/workflows/wetax_local_tax.py` | `_STUB_SUBMIT`, `run_single` 제출 단계 |
-| `src/automation/wetax/_form.py` | 변환 패턴 참고 → 제출 추가 |
-| `src/automation/wetax/_dialogs.py` | confirm 복원 |
-| `src/automation/wetax/_constants.py` | `LABEL_SUBMIT`, M31/M32 경로 |
-| `src/automation/wetax/_navigation.py` | `ensure_upload_form` |
-| `scripts/e2e_wetax_w10_live.py` | M31 복귀 라이브 검증 |
-| `tests/test_wetax_*.py` | 단위 회귀 |
+### 개발·라이브 스크립트
+| 스크립트 | 용도 |
+|----------|------|
+| `scripts/run_wetax_live.py` | 단건 라이브 (`--stay-m32` = 결과 화면 유지) |
+| `scripts/run_wetax_multi_live.py` | 다건 라이브 (`--real-submit`, `--pause` 눈확인용 기본 0) |
+| `scripts/e2e_wetax_w10_live.py` | `ensure_upload_form` E2E |
+| `scripts/e2e_wetax_refactor.py` | 안전 헬퍼 로컬/라이트 E2E |
 
-### 하지 말 것 (제출 안정화 전)
-- runner 전체 분할, 홈택스 대공통화, 체크포인트 전면 도입  
-- **오류 파일로 제출 자동화 강행**
-
-### 한 줄 재개 프롬프트 (복붙용)
+### 한 줄 참고
 ```
-위택스 Phase 13 이어서: src/automation/wetax/PROGRESS.md 핸드오프 기준으로
-오류 0건 .2 파일 준비됨 → 제출하기(click_submit) 실구현부터.
-_STUB_SUBMIT 해제, ensure_upload_form 유지, confirm 복원 필수.
+위택스 Phase 13: 제출 click_submit_report 실구현 완료.
+다건 = 전화·비번 재입력 → 파일 → 변환 → 제출(M33) → ensure_upload_form(M31).
+스텁이 필요하면 WETAX_STUB_SUBMIT=1.
 ```
 
 ---
@@ -59,7 +42,7 @@ _STUB_SUBMIT 해제, ensure_upload_form 유지, confirm 복원 필수.
 ## 범위 (현재 스냅샷)
 
 **Phase 13 — 위택스 지방세 신고 (특별징수 · 회계파일신고)**  
-파일선택·변환까지 실구현. **제출만 스텁** (`_STUB_SUBMIT = True`).
+파일선택·변환·**제출 실구현**. 운영 기본 제출 ON.
 
 ### 구현 완료 (✅)
 | # | 단계 | 코드 |
@@ -71,127 +54,94 @@ _STUB_SUBMIT 해제, ensure_upload_form 유지, confirm 복원 필수.
 | 4 | 파일비밀번호 입력 | GUI `needs_password` → `enter_file_password` (`#filePw`) |
 | 5 | 암호화 파일선택 | `find_jitax_encrypted_file` (`.1`/`.2` only) + `select_encrypted_file` |
 | 6 | 파일변환하기 | `click_convert_file` — confirm 임시수락·복원, 라벨 가드 → M32 |
+| 7 | 제출하기 | `click_submit_report` — 게이트·라벨 가드·confirm → M33 |
 
-### 안전 헬퍼 (제출 전 리팩터)
+### 안전 헬퍼
 | 모듈 | 역할 |
 |------|------|
 | `_dialogs.accept_native_dialogs` | confirm/alert 가로채기 + **finally 복원** |
-| `LABEL_CONVERT` / `LABEL_SUBMIT` | M31/M32 동일 `#btn_next` 구분 |
+| `LABEL_CONVERT` / `LABEL_SUBMIT` | M31/M32 **동일 id `#btn_next`** 구분 |
 | `mask_phone` | 로그·step_data 휴대전화 마스킹 |
-| `get_convert_result_summary` / `result_out` | 정상·오류 건수 메타 (err>0 이어도 변환 성공) |
-| `ensure_upload_form` | M31 업로드 화면 보장 (스텁 후·다음 수임처) |
+| `get_convert_result_summary` / `_wait_convert_summary` | 정상·오류 건수 (표 렌더 폴링) |
+| `ensure_upload_form` | 제출 후 M31 업로드 화면 (다음 수임처) |
+| `stay_on_m32` kwargs | 단건 검증 시 결과 화면 유지 (M31 복귀 생략) |
 
-### 남은 스텁
-| # | 단계 | 예상 셀렉터 / 비고 | 현재 |
-|---|------|-------------------|------|
-| 7 | 제출하기 | M32 `#btn_next`(제출하기) — 제출 후 리프레시 가정 | **STUB** + `ensure_upload_form` |
+**제출 게이트:** 오류>0 또는 정상<1 이면 제출 거부.  
+**변환 단계:** 오류 N건이어도 변환 자체는 성공으로 기록(step_data 메타).
 
-`_STUB_SUBMIT = True` (`wetax_local_tax.py`).  
-변환 성공 후 정상 0건·오류 N건이어도 변환 단계는 성공으로 본다(검증 오류는 파일 재생성 영역).
-
-### 다수임처 루프 설계 (선택건·전체실행 공통 목표) — ★ 확정
+### 다수임처 루프 — ★ 확정·라이브 검증
 
 ```text
-[세션] 로그인 1회 + (필요 시) 회계파일신고 화면 진입 1회
+[세션] 로그인 1회
 for 각 수임처:
-  1. 동일 휴대전화 재입력   (#dclrRlpMblTelno)  ← GUI phone, 수임처 공통
-  2. 동일 파일비밀번호 재입력 (#filePw)         ← GUI password, 수임처 공통
-  3. 해당 수임처 암호화 파일만 교체 업로드      (#file_upload_0_, .1/.2)
-  4. 파일변환하기 클릭                          (#btn_next + 변환 라벨)
-  5. 제출하기 — 현재 STUB → ensure_upload_form(M31)
-  (라이브 시) 제출 → 리프레시 → 폼 빈 상태 확인
-  → 다음 수임처로
+  1. 동일 휴대전화 재입력   (#dclrRlpMblTelno)
+  2. 동일 파일비밀번호 재입력 (#filePw)
+  3. 해당 수임처 암호화 파일 업로드  (#file_upload_0_, .1/.2)
+  4. 파일변환하기 (#btn_next + 변환 라벨) → M32
+  5. 제출하기 (#btn_next + 제출 라벨) → M33
+  6. ensure_upload_form → M31 (빈 업로드 폼)
+  → 다음 수임처
 ```
 
 | 항목 | 정책 |
 |------|------|
-| 로그인 | runner 단 1회 (선택건/전체 공통) |
-| 메뉴 이동 | 첫 수임처 또는 `ensure_upload_form` / M32 이탈 시 |
-| 전화·파일비번 | **수임처마다 다시 넣음** (동일 GUI 값, 로그 마스킹) |
-| 파일 | **수임처마다 다른 `.1`/`.2`** 만 교체 |
-| 변환·제출 | 변환 실구현 / 제출 스텁 → M31 복귀 |
+| 로그인 | runner 단 1회 (선택건/전체 공통, 재사용 시에도 대기) |
+| 전화·파일비번 | **수임처마다 다시 넣음** (동일 GUI 값) |
+| 파일 | **수임처마다 다른 `.1`/`.2`** |
+| 변환·제출 | 실구현. 제출 후 M31 복귀 |
+| CDP 창 | `chrome-cdp-link` 프로필 — **일반 Chrome 과 별개** |
 
-**현재 코드:** 수임처마다 `run_single` → 전화·비번 → 파일선택 → **파일변환(M32)** → 제출 스텁 → `True`.  
-다음 수임처 시 `goto` 가 M32 를 업로드 화면으로 보지 않고 **M31 재진입**.
+**라이브 (2026-07-25):** 드류 efile 2건 연속 실제출 2회 루프 PASS.
 
 ---
 
 ## 파일 위치
-- `src/workflows/wetax_local_tax.py` — Phase 13 어댑터·레지스트리
+- `src/workflows/wetax_local_tax.py` — Phase 13 어댑터·`_STUB_SUBMIT`·`run_single`
 - `src/automation/wetax/_common.py` — 팝업 닫기·`mask_phone`
 - `src/automation/wetax/_navigation.py` — 회계파일신고 이동·`ensure_upload_form`
-- `src/automation/wetax/_form.py` — 휴대전화·파일비밀번호·변환
+- `src/automation/wetax/_form.py` — 전화·비번·파일·변환·**제출**
 - `src/automation/wetax/_dialogs.py` — confirm/alert 임시 수락·복원
-- `src/automation/wetax/_constants.py` — URL·필드 id·라벨
+- `src/automation/wetax/_constants.py` — M31/M32/M33 · `#btn_next` · 라벨
 - GUI: 사이드바 **▼ 위택스** > **위택스 지방세 신고**
-- 라이브 E2E: `scripts/e2e_wetax_w10_live.py`, `scripts/e2e_wetax_refactor.py`
-- 단위 테스트: `tests/test_wetax_dialogs.py`, `test_wetax_file_find.py`, kwargs/toolbar/login
+- 라이브: `scripts/run_wetax_live.py`, `scripts/run_wetax_multi_live.py`
+- 단위 테스트: `tests/test_wetax_*.py` (dialogs, file_find, submit_guard, kwargs, toolbar, login)
 
 ## 기술 스택
-- Playwright + CDP (포트 9223)
+- Playwright + CDP (포트 **9223**)
 - 포털: `https://www.wetax.go.kr/main.do`
-- Human-in-the-loop 공인인증서 로그인
+- Human-in-the-loop 공인인증서 로그인 (전자세금용)
 
 ## 전제조건
-1. Phase 11(지방소득세특별징수전자신고)로 전자신고파일 선제작 — **파일선택 단계 재개 시 필요**
-2. 전자신고파일 비밀번호 (GUI 툴바 **비밀번호**, 홈택스와 동일 스타일)
-3. 담당자 휴대전화번호 (GUI 툴바 **휴대전화**)
+1. Phase 11 전자신고파일 (`지방소득세전자신고_{YYYYMM}/{수임처}/` · `.1`/`.2`)
+2. 파일 비밀번호 (GUI 툴바 **비밀번호**)
+3. 담당자 휴대전화 (GUI 툴바 **휴대전화**)
 
 ## 상세 메모
 
 ### 팝업
-- `div.main-popup-event#pop_*` + `button.close-btn` (개수·id 가변)
-- Playwright real click 우선; jQuery `fnCloseBtn` / `.hide()` 폴백
-- 로그인 전·후 각 1회 호출 (`login.do` 복귀 시 팝업 재생성)
+- `div.main-popup-event#pop_*` + `button.close-btn`
+- 로그인 전·후 각 1회 (`login.do` 복귀 시 팝업 재생성)
 
 ### 로그인 판정
 1. `a.btnLogout` 가시
-2. **로그인연장** 텍스트/버튼 (하위 화면에서 logout 비가시 대비)
+2. **로그인연장** 텍스트/버튼
 3. 텍스트 `로그아웃`
 
-### 전체실행 vs 선택건 로그인 대기
-- **전체실행** (`_handle_run_phase`): 브라우저 재사용 여부와 무관하게 **항상** `_wait_for_login("wetax")`
-- **선택건** (`_handle_run_selected_clients`): 동일하게 **항상** `_wait_for_login` (재사용 시에도).
-  이전에는 `reused=True` 이면 로그인·팝업 닫기를 건너뛰어 위택스 세션 만료/팝업 잔존 리스크가 있었음.
-  회귀: `tests/test_selected_run_login_always.py`
+### 화면 경로
+| 코드 | 경로 | 단계 |
+|------|------|------|
+| M31 | `B070101M31.do` | 1 신고서업로드 |
+| M32 | `B070101M32.do` | 2 서식검증 및 제출 |
+| M33 | `B070101M33.do` | 3 제출결과확인 (일괄신고 제출처리중) |
 
-### 회계파일신고
-- URL: `https://www.wetax.go.kr/etr/lit/b0701/B070101M31.do`
-- 탭: `1 신고서업로드` → `2 서식검증 및 제출` → `3 제출결과확인`
+M31·M32 하단 버튼 **동일 id `#btn_next`** — 라벨으로만 변환/제출 구분.
 
-### GUI kwargs 전달
-- `password`, `phone` → 전체실행/선택건 모두 runner 큐 → `run_single`  
-- 회귀: `tests/test_wetax_gui_kwargs_passthrough.py`, `tests/test_wetax_toolbar_fields.py`
+### GUI kwargs
+- `password`, `phone` → 전체/선택건 runner → `run_single`
+- 회귀: `tests/test_wetax_gui_kwargs_passthrough.py`, `test_wetax_toolbar_fields.py`
 
-### Chrome CDP 수명 (Windows)
-- 에이전트 Job Object 종료 시 자식 Chrome이 같이 죽지 않도록  
-  `launch_chrome` 에 **CREATE_BREAKAWAY_FROM_JOB** 등 분리 플래그 적용 (`src/utils/chrome_cdp.py`)
-
-## 라이브 검증 (E2E)
-
-| 항목 | 결과 | 비고 | 스크립트 |
-|------|------|------|----------|
-| W10-A `ensure_upload_form` (이미 M31) | ✅ 2026-07-24 | no-op 유지, `#filePw` 존재 | `scripts/e2e_wetax_w10_live.py` |
-| W10-B M32 → M31 재진입 | ✅ 2026-07-24 | direct URL + `filePw=1` | 동일 |
-| W3/W2/W6/W14/W4-lite | ✅ (로컬+FS) | confirm 복원·라벨 가드·`.2` 필터 등 | `scripts/e2e_wetax_refactor.py` |
-
-CDP 9223 + 위택스 로그인 세션 필요(W10). 로그아웃 시 스크립트가 main.do 로그인 대기.
-
-## 변경 이력
-- 2026-07-24: 핸드오프 문서 정리 — 체크리스트·재개 순서·파일 표·GUIDE/USER_GUIDE 링크 정렬.
-- 2026-07-24: 핸드오프 섹션 추가 — 오류 없는 파일 대기 중, 재개 시 제출 실구현부터.
-
-- 2026-07-24: W10 `ensure_upload_form` 라이브 E2E PASS (M31 no-op / M32→M31). 스크립트 `scripts/e2e_wetax_w10_live.py`.
-
-- 2026-07-24: 안전 리팩터 — confirm/alert 임시 수락 후 복원(`_dialogs.accept_native_dialogs`),
-  `#btn_next` 변환/제출 이중 의미 가드(LABEL_CONVERT/SUBMIT), efile 확장자 `.1`/`.2` 만 허용,
-  휴대전화 마스킹, 변환 결과 메타(`get_convert_result_summary`)·`ensure_upload_form`(스텁 후 M31 복귀).
-- 2026-07-24: 파일변환하기 실구현 (`click_convert_file` — confirm 오버라이드 + M32 대기). 제출만 스텁.
-- 2026-07-24: 선택건 다수임처 라이브 확인 — 파일 스텁으로 전화·비번 루프 후 다음 수임처 진행 OK.
-- 2026-07-24: 선택건 재사용 시 로그인 대기 정렬 + 라이트 테마(QSS/팔레트) 강화.
-- 2026-07-24: 파일변환·제출 스텁 성공 — 선택건/전체가 전화·비번 후 다음 수임처로 진행.
-- 2026-07-24: 다수임처 루프 설계 확정 — 제출→리프레시 후 동일 전화·비번 재입력 + 수임처별 파일만 교체.
-- 2026-07-24: 선택건 실행에서도 세션 재사용 시 로그인 대기 항상 수행 (전체실행과 동일).  
-  회귀: `tests/test_selected_run_login_always.py`
-- 2026-07-24: 메뉴·portal 등록, 팝업·로그인·이동·전화·파일비번·GUI 툴바까지 구현.  
-  파일선택 이후는 업로드 파일 준비 후 진행 (이 문서 기준 스냅샷).
+### 변경 이력 (요약)
+- 2026-07-25: 제출 실구현 (`click_submit_report`) · `_STUB_SUBMIT` 기본 False  
+  · 표 렌더 폴링 · M33 성공 시그널 · 다건 실제출 라이브 PASS  
+  · `run_wetax_live.py` / `run_wetax_multi_live.py`
+- 2026-07-24: 변환 실구현 · 안전 리팩터 · 제출 스텁 핸드오프

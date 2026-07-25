@@ -10,7 +10,8 @@ WEHAGO Phase 11(지방소득세특별징수전자신고) 전자신고파일을 �
   5. 암호화 파일선택 (수임처별) — 구현
      경로: 지방소득세전자신고_{YYYYMM}/{수임처}/ 최신 .1/.2 파일
   6. 파일변환하기 (#btn_next) — 구현 (confirm 수락·복원 → M32)
-  7. 제출하기 — STUB 후 ensure_upload_form(M31) 으로 다음 수임처 준비
+  7. 제출하기 (#btn_next 제출 라벨) — 실구현
+     정상≥1·오류0 게이트, 성공 후 ensure_upload_form(M31)
 
 portal='wetax'. phase_id 는 사이드바 정렬·표시용.
 """
@@ -22,8 +23,12 @@ from src.workflows.base import BaseWorkflow
 from src.batch.state import StateManager
 
 
-# 제출만 스텁. True 면 제출 클릭 생략 후 M31 복귀 시도.
-_STUB_SUBMIT = True
+# True 면 제출 클릭 생략. 운영/라이브 기본 False.
+# WETAX_STUB_SUBMIT=1 이면 스텁 (다건 루프 검증·중복 제출 방지).
+# stay_on_m32=True 이고 스텁일 때만 M32 유지(검증용).
+_STUB_SUBMIT = os.environ.get("WETAX_STUB_SUBMIT", "").strip().lower() in (
+    "1", "true", "yes", "on",
+)
 
 
 @register(
@@ -51,7 +56,9 @@ class WetaxLocalTaxWorkflow(BaseWorkflow):
     ) -> bool:
         """위택스 특별징수 회계파일신고 — 수임처 1건.
 
-        선택건/전체 루프가 수임처마다 호출. 변환까지 실구현, 제출은 스텁.
+        선택건/전체 루프가 수임처마다 호출. 변환·제출 실구현.
+        kwargs:
+          stay_on_m32: True 면 제출 후(또는 스텁 시) M31 복귀 생략
         """
         from src.automation.wetax._common import log, mask_phone
 
@@ -155,32 +162,101 @@ class WetaxLocalTaxWorkflow(BaseWorkflow):
                 )
                 return False
             # 오류 N건이어도 변환 단계는 성공 — step_data 에 요약만 기록
+            # (제출 단계에서 오류>0 이면 거부)
             state.after_step(job_id, "click_convert_file", convert_meta or None)
 
-        # ── 6. 제출하기 (스텁) + M31 복귀 계약 ──
+        # ── 6. 제출하기 ──
+        # stay_on_m32: 제출 후 M31 복귀 생략 (결과 화면 확인용)
+        stay_on_m32 = bool(kwargs.get("stay_on_m32"))
         if not state.should_skip_step(job_id, "click_submit"):
             state.before_step(job_id, "click_submit", 6)
             if _STUB_SUBMIT:
-                log(
-                    f"  [WETAX stub] [{client_name}] 제출하기 생략 "
-                    f"— M31 복귀 후 다음 수임처"
-                )
-                from src.automation.wetax._navigation import ensure_upload_form
-                try:
-                    back = await ensure_upload_form(page)
-                    if not back:
-                        log(
-                            f"  [WETAX stub] [{client_name}] "
-                            f"ensure_upload_form 실패(다음 수임처 goto 가 재시도)"
+                if stay_on_m32:
+                    try:
+                        url_now = page.url or ""
+                    except Exception:
+                        url_now = "?"
+                    log(
+                        f"  [WETAX stub] [{client_name}] 제출하기 생략 "
+                        f"— stay_on_m32 (M31 복귀 안 함) url={url_now}"
+                    )
+                    try:
+                        from src.automation.wetax._form import (
+                            get_convert_result_summary,
                         )
-                except Exception as e:
-                    log(f"  [WETAX stub] ensure_upload_form 예외: {e}")
+                        summary = await get_convert_result_summary(page)
+                        log(
+                            f"  [WETAX stub] 서식검증 요약 "
+                            f"정상={summary.get('ok')} 오류={summary.get('err')} "
+                            f"url={summary.get('url')}"
+                        )
+                    except Exception as e:
+                        log(f"  [WETAX stub] 서식검증 요약 실패: {e}")
+                        summary = {}
+                    state.after_step(
+                        job_id, "click_submit",
+                        {
+                            "stub": True,
+                            "ensured_m31": False,
+                            "stay_on_m32": True,
+                            **(summary if isinstance(summary, dict) else {}),
+                        },
+                    )
+                else:
+                    log(
+                        f"  [WETAX stub] [{client_name}] 제출하기 생략 "
+                        f"— M31 복귀 후 다음 수임처"
+                    )
+                    from src.automation.wetax._navigation import ensure_upload_form
+                    try:
+                        back = await ensure_upload_form(page)
+                        if not back:
+                            log(
+                                f"  [WETAX stub] [{client_name}] "
+                                f"ensure_upload_form 실패(다음 수임처 goto 가 재시도)"
+                            )
+                    except Exception as e:
+                        log(f"  [WETAX stub] ensure_upload_form 예외: {e}")
+                    state.after_step(
+                        job_id, "click_submit",
+                        {"stub": True, "ensured_m31": True},
+                    )
+            else:
+                from src.automation.wetax._form import click_submit_report
+                submit_meta: dict = {}
+                ok = await click_submit_report(
+                    page, result_out=submit_meta, require_ok=True,
+                )
+                if not ok:
+                    state.fail_step(
+                        job_id, "click_submit",
+                        "제출하기 실패 (게이트 거부·확인창·성공 시그널 타임아웃)",
+                    )
+                    return False
+                log(
+                    f"  [WETAX] [{client_name}] 제출 완료 "
+                    f"reason={submit_meta.get('reason')} url={submit_meta.get('url')}"
+                )
+                ensured = False
+                if not stay_on_m32:
+                    from src.automation.wetax._navigation import ensure_upload_form
+                    try:
+                        ensured = bool(await ensure_upload_form(page))
+                        if not ensured:
+                            log(
+                                f"  [WETAX] [{client_name}] "
+                                f"제출 후 ensure_upload_form 실패"
+                            )
+                    except Exception as e:
+                        log(f"  [WETAX] ensure_upload_form 예외: {e}")
                 state.after_step(
                     job_id, "click_submit",
-                    {"stub": True, "ensured_m31": True},
+                    {
+                        "stub": False,
+                        "ensured_m31": ensured,
+                        "stay_on_m32": stay_on_m32,
+                        **submit_meta,
+                    },
                 )
-            else:
-                state.fail_step(job_id, "click_submit", "제출하기 미구현")
-                return False
 
         return True

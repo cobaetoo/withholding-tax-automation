@@ -45,7 +45,7 @@
 | 10 | WEHAGO | 지방소득세특별징수납부서 (SWTA0112) | 완료 |
 | 11 | WEHAGO | 지방소득세특별징수전자신고 (SWER0109) | 완료 |
 | 12 | 홈택스 | 원천세 신고 | 완료 |
-| 13 | 위택스 | 지방세 신고 (특별징수·회계파일신고) | 부분 (로그인~파일비번+다수임처 스텁 루프) |
+| 13 | 위택스 | 지방세 신고 (특별징수·회계파일신고) | 완료 (변환·제출·다건 루프 라이브) |
 
 ### Phase 1: 수임처 리스트 확보 (WEHAGO)
 
@@ -247,13 +247,11 @@ WEHAGO Phase 11(지방소득세특별징수전자신고, SWER0109)에서 생성�
 위택스(지방세 통합 포털)에 업로드하여 **특별징수 회계파일신고**를 수행하는 단계.
 홈택스 Phase 12가 원천세(국세) 짝이라면, 본 phase는 지방세 짝이다.
 
-**상태: 부분 구현 (2026-07-24)** — 로그인~파일선택·파일변환까지 실구현.  
-**제출하기만 스텁** (`_STUB_SUBMIT`).  
-**다음 작업(재개):** 오류 0건 efile 확보 → 제출 실구현 — 핸드오프는  
-`src/automation/wetax/PROGRESS.md` 상단 「▶ 핸드오프 / 다음에 이어서 할 일」.
+**상태: 완료 (2026-07-25)** — 로그인~파일선택·변환·**제출**·다건 루프 실구현·라이브 검증.  
+상세·라이브 기록: `src/automation/wetax/PROGRESS.md`.
 
 > **★전제조건**
-> 1. Phase 11(지방소득세특별징수전자신고)로 전자신고 파일이 먼저 생성되어 있어야 한다(파일선택 단계부터).
+> 1. Phase 11(지방소득세특별징수전자신고)로 전자신고 파일이 먼저 생성되어 있어야 한다.
 > 2. 전자신고파일 생성 시 설정한 **파일 비밀번호** (GUI 툴바 **비밀번호**, 홈택스와 동일 스타일).
 > 3. 신고 담당자 **휴대전화번호** (GUI 툴바 **휴대전화**).
 > 4. 파일 경로: `바탕화면/지방소득세전자신고_{YYYYMM}/{수임처}/` 아래 **`.1`/`.2` 확장자**만 사용.
@@ -269,25 +267,27 @@ WEHAGO Phase 11(지방소득세특별징수전자신고, SWER0109)에서 생성�
 | 4 | 파일비밀번호 | GUI `password` → `#filePw` (파일선택보다 먼저) | ✅ |
 | 5 | 암호화 파일선택 | Phase 11 폴더 최신 **`.1`/`.2`** · `#file_upload_0_` | ✅ |
 | 6 | 파일변환하기 | `#btn_next`+라벨가드 · confirm 임시수락·복원 → `B070101M32` | ✅ |
-| 7 | 제출하기 | 스텁 후 `ensure_upload_form`(M31 복귀) · 실제 제출 미구현 | ⏸ STUB |
+| 7 | 제출하기 | `#btn_next`+제출 라벨 · 정상≥1 게이트 → `B070101M33` 후 M31 복귀 | ✅ |
 
-**안전 리팩터 (제출 전)**  
-- `_dialogs.accept_native_dialogs`: confirm/alert 가로채기 **finally 복원** (오제출 방지)  
+**안전·제출 정책**  
+- `_dialogs.accept_native_dialogs`: confirm/alert 가로채기 **finally 복원**  
 - M31/M32 동일 `#btn_next` → `LABEL_CONVERT`/`LABEL_SUBMIT` 로 구분  
-- 변환 결과 메타(`ok`/`err` 건수) step_data 기록 — 오류 N건이어도 변환 단계는 성공  
-- 스텁 제출 후 `ensure_upload_form` 으로 다음 수임처 M31 계약 통일  
-- **라이브 검증 (2026-07-24):** `ensure_upload_form` M31 no-op / M32→M31 재진입 PASS  
-  (`scripts/e2e_wetax_w10_live.py`, CDP 9223)  
-
+- 제출 전 서식검증 표 폴링(`_wait_convert_summary`) — 정상 0건 또는 오류 1건 이상이면 제출 거부  
+- 제출 성공 시그널: M33 URL (`ACCOUNTING_SUBMIT_RESULT_PATH`) 등  
+- 제출 후 `ensure_upload_form` 으로 다음 수임처 M31 계약  
+- 운영 기본 제출 ON. 스텁만 필요 시 `WETAX_STUB_SUBMIT=1`  
+- **라이브 (2026-07-25):** 단건 제출 PASS · 다건 2회 연속 실제출 PASS  
 
 **다수임처 루프**  
-`전화·비번 재입력 → 파일 업로드 → 파일변환 → (제출 스텁 + M31 복귀)` 반복.  
-실제 제출·리프레시는 이후. 상세: `src/automation/wetax/PROGRESS.md`.
+`전화·비번 재입력 → 파일 업로드 → 파일변환 → 제출(M33) → ensure_upload_form(M31)` 반복.  
+상세: `src/automation/wetax/PROGRESS.md`.
 
-**GUI**
+**GUI / CLI**
 - 사이드바: 「위택스」 > 「위택스 지방세 신고」(phase 13)
 - 툴바: **비밀번호** (`needs_password`) + **휴대전화** (`needs_phone`) — 모든 수임처에 공통 적용
 - 포털 URL: `https://www.wetax.go.kr/main.do`
+- 단건/다건 라이브 스크립트: `scripts/run_wetax_live.py`, `scripts/run_wetax_multi_live.py`  
+  (눈 확인용 `--pause` 는 기본 0 — 운영 경로에 고정 대시 없음)
 
 ### Phase 5: 고용보험 EDI (근로복지공단)
 

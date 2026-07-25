@@ -13,6 +13,8 @@ ACCOUNTING_FILE_REPORT_PATH = "/etr/lit/b0701/B070101M31.do"
 ACCOUNTING_FILE_REPORT_URL = f"https://www.wetax.go.kr{ACCOUNTING_FILE_REPORT_PATH}"
 # 파일변환 후 서식검증·제출 화면 (라이브 2026-07-24)
 ACCOUNTING_CONVERT_RESULT_PATH = "/etr/lit/b0701/B070101M32.do"
+# 제출결과확인 후보 경로 (라이브 제출 시 확정·보정)
+ACCOUNTING_SUBMIT_RESULT_PATH = "/etr/lit/b0701/B070101M33.do"
 
 # 신고서 업로드 화면 필드 (B070101M31) — 라이브 덤프
 FIELD_PHONE = "dclrRlpTelno"           # 전화번호 (유선, 기입력될 수 있음)
