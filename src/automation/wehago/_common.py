@@ -728,6 +728,8 @@ async def get_clients_with_biz_from_taxagent(page):
     }''') or 0
 
     results = []
+    loose_cnt = 0        # 부분일치로 구제된 건수(태그가 콤마로 안 나뉜 경우)
+    ambiguous_cnt = 0    # 매월·반기 동시 관측 → 미지정 처리한 건수
     for i in range(total_cards):
         # i번째 카드 클릭 + 카드 이름 즉시 읽기
         click_result = await _safe_evaluate(page, r'''(idx) => {
@@ -741,14 +743,16 @@ async def get_clients_with_biz_from_taxagent(page):
                     const nameEl = cards[idx].querySelector('span.company_name_text');
                     const cardName = nameEl ? nameEl.textContent.trim() : '';
                     // 카드에 달린 태그(button.btn_tag span) 수집 → 원천 신고주기(매월/반기) 추출.
-                    // 태그 텍스트는 콤마 구분(예: "테스트1,원천,매월")이므로 세그먼트 중
-                    // 매월/반기 인 것을 찾는다.
+                    // 태그 텍스트는 보통 콤마 구분(예: "테스트1,원천,매월")이지만, 태그가
+                    // 중첩 <em>/<i> 등으로 렌더되면 textContent 가 구분자 없이 이어붙어
+                    // "한정선원천반기" 처럼 한 덩어리로 나온다. 그래서 2단으로 판별한다.
                     const tagSpans = cards[idx].querySelectorAll('button.btn_tag span');
                     const tags = [];
                     for (const ts of tagSpans) {
                         const tx = (ts.textContent || '').trim();
                         if (tx) tags.push(tx);
                     }
+                    // [1차] 완전일치 — 콤마 세그먼트가 정확히 '매월'/'반기'. 가장 신뢰도 높음.
                     let cycle = '';
                     for (const t of tags) {
                         for (const seg of t.split(',')) {
@@ -756,10 +760,27 @@ async def get_clients_with_biz_from_taxagent(page):
                             if (s === '매월' || s === '반기') cycle = s;
                         }
                     }
-                    return {clicked: true, cardName: cardName, tags: tags, cycle: cycle};
+                    let cycleMode = cycle ? 'exact' : '';
+                    // [2차] 부분일치 폴백 — 1차가 실패했을 때만. 구분자 없이 이어붙은
+                    // 태그를 구제한다. 단 매월·반기가 동시에 보이면 어느 쪽인지 알 수
+                    // 없으므로 추측하지 않고 미지정(빈값)으로 남긴다 — 잘못된 주기로
+                    // 마감하는 것보다 실행 시 화면 ground truth 로 재판별하는 편이 안전.
+                    if (!cycle) {
+                        const joined = tags.join(',');
+                        const hasMonthly = joined.includes('매월');
+                        const hasHalf = joined.includes('반기');
+                        if (hasMonthly && hasHalf) {
+                            cycleMode = 'ambiguous';
+                        } else if (hasMonthly || hasHalf) {
+                            cycle = hasMonthly ? '매월' : '반기';
+                            cycleMode = 'loose';
+                        }
+                    }
+                    return {clicked: true, cardName: cardName, tags: tags,
+                            cycle: cycle, cycleMode: cycleMode};
                 }
             }
-            return {clicked: false, cardName: '', tags: [], cycle: ''};
+            return {clicked: false, cardName: '', tags: [], cycle: '', cycleMode: ''};
         }''', i)
         if not click_result or not click_result.get("clicked"):
             continue
@@ -809,14 +830,30 @@ async def get_clients_with_biz_from_taxagent(page):
         if info and info["name"]:
             name = info["name"].replace("[테스트] ", "")
             if name:
+                cycle = (click_result.get("cycle") or "") if click_result else ""
+                mode = (click_result.get("cycleMode") or "") if click_result else ""
+                # 부분일치/판별불가는 태그가 규격(콤마 구분)에서 벗어났다는 신호이므로
+                # 어느 수임처인지 로그에 남긴다(위하고에서 태그를 분리하면 완전일치로 승격).
+                if mode == "loose":
+                    loose_cnt += 1
+                    log(f"  WARN 신고주기 부분일치: '{name}' 태그={click_result.get('tags')}"
+                        f" → '{cycle}' (콤마 구분 없음 — 위하고 태그 분리 권장)")
+                elif mode == "ambiguous":
+                    ambiguous_cnt += 1
+                    log(f"  WARN 신고주기 판별 불가: '{name}' 태그={click_result.get('tags')}"
+                        f" — 매월·반기 동시 관측으로 미지정(실행 시 화면에서 재판별)")
                 results.append({
                     "name": name,
                     "business_number": info.get("business_number", ""),
-                    "report_cycle": (click_result.get("cycle") or "") if click_result else "",
+                    "report_cycle": cycle,
                 })
 
     cycle_cnt = sum(1 for r in results if r.get("report_cycle"))
-    log(f"  taxagent 스크랩: {len(results)}건 (이름+사업자번호), 신고주기 태그 {cycle_cnt}건")
+    extra = ""
+    if loose_cnt or ambiguous_cnt:
+        extra = f" [부분일치 {loose_cnt}건 / 판별불가 {ambiguous_cnt}건]"
+    log(f"  taxagent 스크랩: {len(results)}건 (이름+사업자번호), "
+        f"신고주기 태그 {cycle_cnt}건{extra}")
     return results
 
 
