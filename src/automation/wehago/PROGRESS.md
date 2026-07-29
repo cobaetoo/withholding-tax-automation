@@ -101,6 +101,14 @@ python src/automation/wehago/run_swer0101.py
   - `.LSbutton` 클릭으로 열기 → `.LSselectResult li`에서 텍스트 매치 후 클릭
   - 드롭다운 인덱스 0 = 첫 번째 드롭다운 (구분)
 
+#### [5.5/7] 지급일 확보 — ★조회 완성 조건
+- `ensure_swsa_pay_date(page, refill=...)`: **귀속연월만으로는 조회가 좁혀지지 않는다.**
+  지급일까지 채워져야 해당 회차만 잡힌다 (실측: 지급일 없이 회차 5건 → 지급일 포함 시 1건)
+- 지급일은 **구분 선택 시 WEHAGO 가 자동으로 채운다** → 그 기본값을 그대로 사용(날짜를 임의 생성하지 않음)
+- 비어 있으면 구분 재선택으로 자동 채움 재유도(2회) → 끝내 비면 `raise` (불완전 조회로 PDF 를 뽑지 않음)
+- 검색영역 접근은 **제목 기반**: `open_search_calendar(page, "지급일")` 이 `#SearchMain .item` 중 제목이 일치하는 항목의 인덱스를 찾아 `locator().nth(idx)` 로 연다
+  - ★구 `set_swsa_ym` 은 `.item:first-child` 로 위치를 고정해 첫 항목(귀속연월)만 열 수 있었다. 지급일은 3번째 항목이라 재사용 불가 → 일반화함
+
 #### [6-7/7] 복사후 재계산 모달 (조건부)
 - 구분 변경 시 모달이 뜨는지 먼저 감지
 - **모달 있으면**: "복사후 재계산" 클릭 → "취소" 클릭
@@ -132,9 +140,13 @@ python src/automation/wehago/run_swer0101.py
 - 에러 모달 감지 후 결과 반환
 
 #### [PDF] #print 버튼 → 일괄출력 실행
-- `open_print_dialog(page)`: 브라우저에서 `#print` 버튼 클릭 → 드롭다운에서 "일괄출력" 클릭
-- WEHAGO PrintDialog (Windows Forms 앱, `Duzon - PrintDialog`) 가 별도 프로세스로 실행됨
-- PrintDialog 경로: `C:\Douzone\Wehago\WehagoPrint`
+- `select_all_pay_periods(page)`: **회차 그리드 전체 체크** (선행 필수 — 미선택 시 모달이 "선택된 급여가 없습니다"로 막힘)
+  - `getActiveGrid()` 는 **포커스 의존**이라 키 컬럼 `ym_rvrs` 로 회차 그리드를 검증하고, 아니면 컨테이너(`Left_grid` 등) 순회 클릭으로 포커스 이동
+- `open_print_dialog(page)`: `#print` → 드롭다운 "일괄출력" → **웹 모달 `급여대장 일괄인쇄`** → **모달 내 [일괄출력] 클릭** → PrintDialog 실행
+  - ★2026-07 WEHAGO 개편★ 메뉴와 PrintDialog 사이에 웹 모달(Canvas 미리보기)이 새로 삽입됨. **모달 내 버튼 클릭 단계가 빠지면 PrintDialog 가 영영 안 뜬다** → 30초 타임아웃 → PDF 0건 (회계법인 신고 버그, `5198a37` 수정)
+  - 모달 버튼: `닫기(Esc)` / `일괄PDF저장` / **`일괄출력`**. `_click_modal_button()` 이 `getBoundingClientRect()` 중심으로 real click (LUX 버튼은 JS `.click()` 무반응 케이스)
+- WEHAGO PrintDialog (Windows Forms 앱, title `Duzon - PrintDialog`, auto_id `PrintDialogSuperPlus`) 가 별도 프로세스로 실행됨
+- PrintDialog 경로: `C:\Douzone\Wehago\WehagoPrint` (★`C:\Duzon` 아님 — 오탐 주의)
 - pywinauto로 OS 레벨에서 제어 (Playwright가 아닌 Windows UI Automation)
 
 #### [PDF] 인쇄형태 선택

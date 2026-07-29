@@ -136,15 +136,29 @@ Phase 2/3에서 수임처 테이블의 특정 행을 Ctrl/Shift 클릭으로 다
 
 수임처별로 SWSA0101(급여자료입력) 페이지에서 **Duzon PrintDialog**(OS 수준, pywinauto 제어)로 PDF를 발급. 인쇄형태를 전환해가며 **2종 PDF**를 같은 수임처 폴더에 저장(`download_multi_pdf`).
 
-1. 수임처 SmartA 진입(사업자번호 검색) → SWSA0101 이동(귀속연월/드롭다운 설정)
-2. `#print` 버튼 → "일괄출력" 메뉴 → Duzon PrintDialog 실행
-3. 인쇄형태(cbContents 콤보박스)를 순회하며 각각 PDF 저장:
+1. 수임처 SmartA 진입(사업자번호 검색) → SWSA0101 이동
+2. **조회 조건 확정** — 귀속연월 + **지급일** + 구분(급여+상여)
+   - ★귀속연월만으로는 조회가 좁혀지지 않는다★ (지급일 없이 조회 시 회차가 전부 잡힘)
+   - 지급일은 구분 선택 시 WEHAGO가 자동으로 채운다 → **그 기본값을 그대로 사용**(날짜를 임의 생성하지 않음). 비어 있으면 구분 재선택으로 재유도하고, 끝내 비면 `raise`로 중단(불완전 조회 차단). `ensure_swsa_pay_date()`
+3. **회차 그리드 전체 선택**(`checkAll`) — 미선택 시 모달이 "선택된 급여가 없습니다"로 막힌다
+4. `#print` 버튼 → "일괄출력" 메뉴 → **웹 모달 `급여대장 일괄인쇄`** → 모달 내 **[일괄출력]** 클릭 → Duzon PrintDialog 실행
+   - ★2026-07 개편★ 메뉴와 PrintDialog 사이에 이 웹 모달이 새로 끼어들었다. **모달 내 버튼 클릭 단계가 없으면 PrintDialog가 영영 뜨지 않는다**(→ PDF 0건 버그, 아래 참고)
+5. 인쇄형태(cbContents 콤보박스)를 순회하며 각각 PDF 저장:
    - **급여대장** (cbContents 상단)
    - **급여명세(사원당 한장)** (그 아래)
    - ★cbContents 드롭다운 **상단→하단 순서**로 받아야 함★ — 역순(하단→상단) 선택 시 드롭다운 스크롤 업이 꼬여 잘못된 항목이 클릭된다. `SALARY_PDF_FORMATS` 참고.
-4. 저장 경로: `~/Desktop/위하고급여명세PDF_{YYYYMM}/{수임처명}/` — 급여대장·급여명세 PDF 각각.
+6. 저장 경로: `~/Desktop/위하고급여명세PDF_{YYYYMM}/{수임처명}/` — 급여대장·급여명세 PDF 각각.
+7. **PDF 0건은 실패로 보고**(`fail_step` + `return False`). 실패 경로에서도 모달은 반드시 정리한다.
 
 > **인쇄형태 옵션**(cbContents, 15종): 급여명세(구)·급여대장·급여대장(부서별)·급여대장(비과세계)·창봉투·**급여명세(사원당 한장)**·급여명세(전체항목)·... 현재 **급여대장 + 급여명세(사원당 한장)**만 다운로드. 추가 시 `SALARY_PDF_FORMATS`에 상단→하단 순서로 기재.
+>
+> 상단 메뉴의 `사원별 일괄출력`·`급여명세서 PDF 개별 변환`은 자동 클릭에 무반응이지만 **추적 불필요** — 급여명세 계열은 cbContents에 모두 있고, 버그 이전 동작도 이 콤보 경로였다. 두 메뉴는 (추정) 사원별 파일 분할일 뿐 내용은 동일하다.
+
+#### 알려진 함정
+
+- **`window.Grids.getActiveGrid()`는 포커스 의존** — 시점에 따라 다른 그리드를 반환한다. 회차 그리드는 키 컬럼 `ym_rvrs` 보유 여부로 검증하고, 아니면 그리드 컨테이너(`Left_grid` 등)를 순회 클릭해 포커스를 옮긴다. 회차 그리드 컬럼: `ym_rvrs`(귀속월)·`fg_pay`·`dt_pay`(지급일자)·`num`(인원)·`yn_close`·`am_allowpay`·`am_orpay`.
+- **해상도 무관 불변식** — 웹 버튼은 `getBoundingClientRect()` 실시간 중심으로 real mouse click(LUX 버튼은 JS `.click()`이 무시되는 경우가 있다). WinForms는 `auto_id` 기반 `child_window()`. 다이얼로그가 **보조 모니터**(실측 x>1920)에 뜨므로 절대좌표는 반드시 깨진다.
+- **Duzon 설치 경로는 `C:\Douzone\Wehago\WehagoPrint\`** — `C:\Duzon`으로 찾으면 없다고 나온다. PrintDialog 창은 title `Duzon - PrintDialog`, auto_id `PrintDialogSuperPlus`.
 
 ### Phase 6: 원천이행상황신고서 (WEHAGO — SWTA0101)
 
