@@ -21,7 +21,9 @@
 앱 실행
   │
   ├─ ① 베타 만료일 확인 (오프라인)
-  │     만료 → 종료
+  │     만료 → 만료 게이트(_run_expiry_update_gate, frozen 빌드만)
+  │            ├─ 새 버전 있음 → 제안 → 다운로드 → 무인설치 → 종료(설치기가 재실행)
+  │            └─ 없음/네트워크 불가/dev 모드 → 기존 만료 안내 → 종료
   │
   ├─ ② 세션 파일 로드 → validate_session()
   │     ├─ JWT exp 확인 → 만료 시 refresh 시도
@@ -132,4 +134,4 @@ build.py                        # auth 관련 hidden-import 추가
 | 로그인 화면이 안 나옴 | 세션 캐시 남음 | `auth_session.json` 삭제 후 재실행 |
 | "서버에 연결할 수 없습니다" | 인터넷 연결 문제 | 네트워크 확인 |
 | "이메일 또는 비밀번호가 올바르지 않습니다" | 잘못된 자격 증명 | Supabase 대시보드에서 계정 확인 |
-| "사용 기간 만료" | BETA_EXPIRES 경과 | auth_config.py 만료일 업데이트 후 재빌드 |
+| "사용 기간 만료" | BETA_EXPIRES 경과 | 새 버전이 게시돼 있으면 만료 게이트가 그 자리에서 설치를 제안한다(`gui_main._run_expiry_update_gate`, frozen 빌드만). 배포 측 조치는 auth_config.py 만료일 갱신 후 재빌드·릴리스 |
