@@ -152,6 +152,259 @@ def _dispatch_cli_subprocess() -> bool:
     return True
 
 
+# 워치독으로 지역 루프를 빠져나왔을 때 아직 살아있는 UpdateWorker 를 담아두는 곳.
+# 실행 중인 QThread 가 GC 되면 "QThread: Destroyed while thread is still running"
+# → 프로세스 abort(0xC0000409) 다. 여기 담아 참조를 유지해 GC 를 막는다.
+# 이 함수 직후 sys.exit(1) 로 프로세스가 끝나므로 이 정도로 충분하다.
+_ORPHANED_WORKERS = []
+
+
+def _show_expiry_notice():
+    """기존 만료 안내 (문구·동작 그대로) — 폴백 경로에서 재사용."""
+    from PySide6.QtWidgets import QMessageBox
+    from src.ui.resources.auth_config import BETA_EXPIRES
+
+    QMessageBox.critical(
+        None, "사용 기간 만료",
+        f"베타 사용 기간이 만료되었습니다.\n({BETA_EXPIRES})\n\n"
+        "새 버전을 설치해 주세요.",
+    )
+
+
+def _run_expiry_update_gate() -> None:
+    """베타 만료 시 '종료 직전' 업데이트 설치 경로를 제공한다.
+
+    만료되면 앱이 sys.exit(1) 로 끝나 버려서, 사용자가 새 버전을 받을 자동 경로가
+    전혀 없었다(자동 업데이트는 MainWindow 안에 있는데 거기까지 못 감). 그래서
+    게이트 자체에서 버전 확인 → 다운로드 → 무인설치까지 밟아준다.
+
+    ★ 이 함수는 어떤 경우에도 예외를 밖으로 던지지 않는다. 업데이트 로직 결함이
+      만료 안내 자체를 막으면 안 되므로, 실패는 모두 기존 안내로 폴백한다.
+    """
+    try:
+        from PySide6.QtWidgets import QMessageBox, QProgressDialog, QPushButton
+        from PySide6.QtCore import Qt, QEventLoop, QTimer
+
+        from src.utils import updater
+        from src.ui.resources.auth_config import BETA_EXPIRES
+
+        # 개발 모드에서는 설치를 진행하지 않는다 (main_window._apply_update 와 동일 규약).
+        if not getattr(sys, "frozen", False):
+            _show_expiry_notice()
+            return
+
+        from src.ui.workers.update_worker import UpdateWorker
+
+        updater.log_event("trigger: expiry-gate")
+
+        # ── 1) 버전 확인 ────────────────────────────────────────────────
+        # 이 게이트는 MainWindow 생성 이전, 즉 app.exec() 가 아직 안 도는 시점에
+        # 실행된다. 워커 시그널을 받으려면 이벤트 루프가 필요하므로 QEventLoop
+        # 지역 루프로 완료를 기다린다 (nested exec — 여기서만 UI 를 돌린다).
+        holder = {"res": None, "done": False}
+        worker = UpdateWorker()
+        loop = QEventLoop()
+
+        def _on_check(r):
+            holder["res"] = r
+            holder["done"] = True
+            loop.quit()
+
+        def _on_check_failed(_msg):
+            holder["done"] = True
+            loop.quit()
+
+        # QueuedConnection 을 명시 — 워커 스레드에서 emit 된 시그널을 반드시 메인
+        # 스레드 이벤트 루프를 거쳐 배달해, exec() 진입 이전에 quit() 이 직접 호출돼
+        # 유실되는(=영영 안 끝나는) 상황을 구조적으로 막는다.
+        worker.check_done.connect(_on_check, Qt.QueuedConnection)
+        worker.failed.connect(_on_check_failed, Qt.QueuedConnection)
+
+        dlg = QProgressDialog("업데이트 확인 중...", None, 0, 0, None)
+        dlg.setWindowTitle("업데이트")
+        dlg.setWindowModality(Qt.ApplicationModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.show()
+
+        # 워치독(20초) — fetch 의 timeout=6 은 DNS(getaddrinfo) 를 bound 하지 못하고,
+        # start() 실패나 run() 이 BaseException 으로 죽으면 시그널이 영영 안 온다.
+        # 그러면 취소 버튼도 없는 모달이 영구히 남아 강제 종료 말고는 길이 없으므로
+        # 루프에 반드시 하한을 둔다. (lambda 가 loop 참조를 유지 → 조기 GC 방지)
+        QTimer.singleShot(20000, lambda: loop.quit())
+
+        worker.start_check()
+        loop.exec()
+        if not worker.wait(3000):
+            _ORPHANED_WORKERS.append(worker)
+        dlg.close()
+
+        if not holder["done"]:
+            updater.log_event("expiry-gate: check-timeout")
+            _show_expiry_notice()
+            return
+
+        res = holder["res"]
+        if not updater.should_offer_expiry_update(res):
+            # 네트워크 불가 / 최신 버전 없음 → 현행 동작 그대로 (안내 후 종료)
+            _show_expiry_notice()
+            return
+
+        version = str(res.get("version", ""))
+
+        # ── 2) 설치 제안 ────────────────────────────────────────────────
+        box = QMessageBox()
+        box.setIcon(QMessageBox.Critical)
+        box.setWindowTitle("사용 기간 만료")
+        box.setText(
+            f"베타 사용 기간이 만료되었습니다.\n({BETA_EXPIRES})\n\n"
+            f"새 버전 v{version} 이 있습니다.\n지금 설치하시겠습니까?\n"
+            "(설치 후 프로그램이 다시 실행됩니다.)"
+        )
+        btn_update = box.addButton("지금 업데이트", QMessageBox.AcceptRole)
+        box.addButton("종료", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is not btn_update:
+            updater.log_event(f"expiry-gate: quit v={version}")
+            return
+
+        updater.log_event(f"expiry-gate: accept v={version}")
+
+        # ── 3) 다운로드 ────────────────────────────────────────────────
+        try:
+            # version.json 의 size 가 비정상 문자열이어도 게이트가 죽으면 안 된다.
+            size = int(res.get("size", 0) or 0)
+        except (TypeError, ValueError):
+            size = 0
+
+        # 다운로드 + 설치 압축해제 여유공간(대략 2배) 확인
+        if size and not updater.has_enough_disk(size * 2):
+            updater.log_event(f"expiry-gate: fail insufficient-disk need={size * 2}")
+            QMessageBox.warning(
+                None, "디스크 공간 부족",
+                "업데이트에 필요한 디스크 여유 공간이 부족합니다.",
+            )
+            _show_expiry_notice()   # 어떤 경로로 끝나든 만료 안내는 반드시 보여준다
+            return
+
+        state = {"path": None, "canceled": False}
+        dl_worker = UpdateWorker()
+        dl_loop = QEventLoop()
+
+        prog = QProgressDialog("업데이트 다운로드 중...", "취소", 0, 100, None)
+        prog.setWindowTitle("업데이트")
+        prog.setWindowModality(Qt.ApplicationModal)
+        prog.setMinimumDuration(0)
+        prog.setAutoClose(False)
+        prog.setAutoReset(False)
+        prog.setValue(0)
+        # 취소 버튼을 직접 만들어 참조를 쥔다 — 취소 후 '비활성화'만 하기 위해서다.
+        # setCancelButton(None) 은 클릭 시그널 처리 도중 그 버튼을 delete 하게 되어 위험.
+        cancel_btn = QPushButton("취소")
+        prog.setCancelButton(cancel_btn)
+
+        def _on_progress(done, total):
+            # 취소 후에는 갱신하지 않는다 — 뒤늦게 도착한 진행률이 '취소 중...'
+            # 라벨을 덮어써서 아직 받는 것처럼 보이면 안 된다.
+            if state["canceled"]:
+                return
+            if total > 0:
+                pct = min(int(done * 100 / total), 100)
+                prog.setValue(pct)
+                prog.setLabelText(
+                    f"업데이트 다운로드 중... {pct}% "
+                    f"({done // (1024 * 1024)}MB / {total // (1024 * 1024)}MB)"
+                )
+
+        def _on_cancel():
+            # QProgressDialog 는 canceled 시그널과 함께 스스로 hide 한다
+            # (setAutoClose/AutoReset(False) 로도 못 막는다). 그런데 워커는 다음
+            # 262KB 청크 경계(최악은 30초 소켓 타임아웃)에서야 취소를 알아채므로,
+            # 그대로 두면 '창도 없이 멈춘 것 같은' 구간이 생긴다 → 다시 띄운다.
+            state["canceled"] = True
+            dl_worker.cancel()
+            cancel_btn.setEnabled(False)      # 중복 클릭 차단
+            prog.setLabelText("취소 중... 잠시만 기다려 주세요.")
+            prog.show()
+
+        def _on_done(path):
+            state["path"] = path or ""
+            dl_loop.quit()
+
+        prog.canceled.connect(_on_cancel)
+        # 확인 단계와 같은 이유로 QueuedConnection 명시 (메인 스레드 배달 보장).
+        dl_worker.download_progress.connect(_on_progress, Qt.QueuedConnection)
+        dl_worker.download_done.connect(_on_done, Qt.QueuedConnection)
+        dl_worker.failed.connect(lambda _m: _on_done(""), Qt.QueuedConnection)
+        try:
+            dl_worker.start_download(res.get("url", ""), size, res.get("sha256", ""))
+            dl_loop.exec()
+        finally:
+            # ★ close() 보다 먼저 끊어야 한다. QProgressDialog 는 closeEvent 에서도
+            #   canceled 를 emit 하므로, 연결을 남겨두면 '정상 완료 → prog.close()'
+            #   가 _on_cancel 을 불러 state["canceled"] 를 True 로 뒤집는다.
+            #   그러면 should_install_downloaded 가 False 가 되어 설치가 영영 안 된다.
+            try:
+                prog.canceled.disconnect(_on_cancel)
+            except (RuntimeError, TypeError):
+                pass                      # 이미 끊겼거나 파괴됨 — 무해
+            # 어떤 이유로 루프를 빠져나오든 워커를 남기지 않는다 (실행 중 QThread
+            # 가 GC 되면 프로세스 abort). 정리 안 되면 참조만 붙들고 넘어간다.
+            dl_worker.cancel()
+            if not dl_worker.wait(3000):
+                _ORPHANED_WORKERS.append(dl_worker)
+            prog.close()
+
+        path = state["path"]
+        # download_installer 는 마지막 청크 이후(sha256·검증·os.replace)의 취소를
+        # 감지하지 못해 정상 경로를 돌려준다 → 취소 플래그를 함께 봐야 한다.
+        if not updater.should_install_downloaded(path, state["canceled"]):
+            if state["canceled"]:
+                updater.log_event(f"expiry-gate: canceled v={version}")
+            else:
+                QMessageBox.warning(
+                    None, "업데이트 실패",
+                    "다운로드에 실패했습니다.\n잠시 후 다시 시도해 주세요.",
+                )
+            _show_expiry_notice()
+            return
+
+        # ── 4) 설치 ────────────────────────────────────────────────────
+        # 성공 시 추가 안내 없이 반환 — 호출부의 sys.exit(1) 이 즉시 프로세스를
+        # 끝내야 exe/_internal 파일 잠금이 풀려 무인설치가 성공한다.
+        if not updater.spawn_installer_and_detach(path):
+            QMessageBox.warning(
+                None, "업데이트 실패", "설치 프로그램을 실행하지 못했습니다.",
+            )
+            _show_expiry_notice()
+        return
+    except Exception as e:
+        try:
+            from src.utils import updater as _u
+            _u.log_event(f"expiry-gate: error {e!r}")
+        except Exception:
+            pass
+        try:
+            _show_expiry_notice()
+        except Exception:
+            pass
+    finally:
+        # 정리 못 한 워커가 남았다면 여기서 프로세스를 끝낸다.
+        # _ORPHANED_WORKERS 로 참조를 유지해도 인터프리터 종료(sys.exit → 파이널라이즈)
+        # 시점에 래퍼가 파괴되면서 결국 "QThread: Destroyed while thread is still
+        # running" → abort(0xC0000409) 로 죽는 것을 헤드리스로 확인했다. 사용자는 이미
+        # 만료 안내를 본 뒤이고 어차피 종료(코드 1)이므로, 크래시 대화상자를 띄우느니
+        # 파이널라이즈를 건너뛰고 같은 코드로 조용히 끝낸다.
+        if _ORPHANED_WORKERS:
+            try:
+                from src.utils import updater as _u2
+                _u2.log_event("expiry-gate: hard-exit (worker still running)")
+            except Exception:
+                pass
+            os._exit(1)
+
+
 def main():
     # 병렬 자동화 subprocess 디스패치 (frozen exe --wtax-cli) — GUI 없이 CLI 실행 후 종료.
     # 빌드된 exe 에서는 python -m 이 불가해 parallel_cli_worker 가 이 진입점을 경유해 CLI 모듈을 실행.
@@ -202,11 +455,8 @@ def main():
 
     # 1) 베타 만료 확인
     if is_beta_expired():
-        QMessageBox.critical(
-            None, "사용 기간 만료",
-            f"베타 사용 기간이 만료되었습니다.\n({BETA_EXPIRES})\n\n"
-            "새 버전을 설치해 주세요.",
-        )
+        # 종료 전에 업데이트 설치 기회를 제공 (안내만 하고 끝나면 예전과 동일).
+        _run_expiry_update_gate()
         sys.exit(1)
 
     # 2) 세션 검증 → 유효하면 바로 MainWindow 진입

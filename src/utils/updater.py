@@ -225,6 +225,36 @@ def should_prompt(silent: bool, mandatory: bool, version: str,
     return True
 
 
+def should_offer_expiry_update(res: dict) -> bool:
+    """만료 게이트에서 업데이트 설치를 제안할지 판정 (순수 함수).
+
+    일반 프롬프트(should_prompt)와 달리 skip_version/deferred 를 의도적으로 무시한다 —
+    만료 상태에서는 업데이트가 앱을 다시 사용할 수 있는 유일한 경로이므로,
+    사용자가 과거에 '이 버전 건너뛰기' 한 버전이라도 제안해야 한다.
+    """
+    if not isinstance(res, dict):
+        return False
+    if res.get("action") not in ("optional", "mandatory"):
+        return False
+    if not res.get("url"):
+        return False
+    # sha256 이 없으면 validate_installer 가 어차피 거부한다 →
+    # 다운로드를 시켜놓고 실패시키지 말고 제안 자체를 하지 않는다.
+    if not res.get("sha256"):
+        return False
+    return True
+
+
+def should_install_downloaded(path: str, canceled: bool) -> bool:
+    """다운로드 결과를 설치로 넘길지 판정 (순수 함수).
+
+    download_installer 는 read 루프에서만 취소를 감지하므로, 마지막 청크 이후
+    (sha256·검증·os.replace) 에 누른 취소는 무시되고 정상 경로가 반환된다.
+    사용자가 거부한 설치를 진행하지 않으려면 호출부가 취소 플래그를 함께 봐야 한다.
+    """
+    return bool(path) and not canceled
+
+
 # ── 다운로드 + 검증 ─────────────────────────────────────────────────────
 
 class _Cancelled(Exception):
