@@ -5,8 +5,8 @@
 하위 모듈로 분할 관리:
 - _swsa_constants.py: JS 상수 + PrintDialog 상수
 - _swsa_excel.py:     엑셀 다운로드/변환/업로드 + 모달 핸들러
-- _swsa_calendar.py:  React LS_calendar 귀속연월 설정
-- _swsa_pdf.py:       Windows PrintDialog PDF 다운로드
+- _swsa_calendar.py:  React LS_calendar 귀속연월/지급일 설정
+- _swsa_pdf.py:       일괄인쇄 웹 모달 → Duzon PrintDialog PDF 저장
 
 사전 조건:
 - page가 이미 SmartA 급여 페이지에 있어야 함
@@ -30,7 +30,7 @@ from src.automation.wehago._swsa_excel import (
     download_excel, convert_for_upload, upload_excel, recalculate_salary,
     _handle_code_link_modal, _handle_jegasan_modal,
 )
-from src.automation.wehago._swsa_calendar import set_swsa_ym
+from src.automation.wehago._swsa_calendar import set_swsa_ym, ensure_swsa_pay_date
 from src.automation.wehago._swsa_pdf import download_pdf
 
 

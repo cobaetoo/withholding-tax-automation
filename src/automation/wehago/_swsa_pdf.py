@@ -17,6 +17,11 @@ from src.automation.wehago._swsa_constants import (
     PRINT_DIALOG_CLASS_RE,
     SAVE_DIALOG_CLASS,
     DEFAULT_PRINT_FORMAT,
+    BULK_MODAL_PRINT_BTN,
+    PERIOD_GRID_KEY_COL,
+    _TOP_MODAL_BUTTON_RECT_JS,
+    _PERIOD_GRID_INFO_JS,
+    _CHECK_ALL_ROWS_JS,
 )
 from src.utils.human import net_mult
 
@@ -26,8 +31,70 @@ if sys.platform == "win32":
     pywinauto.actionlogger.ActionLogger.logger.handlers = []
 
 
+async def _click_modal_button(page, label):
+    """웹 모달의 라벨 버튼을 real mouse click.
+
+    ★해상도 무관★ 좌표 상수를 쓰지 않고 요소의 실시간 rect 중심을 계산해 클릭한다.
+    (LUX 버튼은 JS .click() 이 무시되는 경우가 있어 real click 이 필요 —
+     _swsa_excel.recalculate_salary 와 동일한 검증된 패턴.)
+    """
+    rect = await page.evaluate(_TOP_MODAL_BUTTON_RECT_JS, label)
+    if not rect:
+        return False
+    await page.mouse.click(rect["x"], rect["y"])
+    return True
+
+
+async def select_all_pay_periods(page):
+    """회차 그리드 전체 선택. 선택이 없으면 '선택된 급여가 없습니다' 로 막힌다.
+
+    window.Grids.getActiveGrid() 는 **포커스에 따라 다른 그리드를 반환**하므로(실측),
+    키 컬럼(ym_rvrs) 보유 여부로 회차 그리드가 맞는지 검증하고 아니면 그리드
+    컨테이너를 순회 클릭해 포커스를 옮긴다(locator 클릭 — 좌표 무관).
+
+    Returns:
+        {'items': 총 회차수, 'checked': 선택수} / 그리드를 못 찾으면 None.
+    """
+    info = await page.evaluate(_PERIOD_GRID_INFO_JS, PERIOD_GRID_KEY_COL)
+    if not info.get("ok"):
+        for gid in ("Left_grid", "Mid_left_grid_view", "Mid_right_grid",
+                    "Right_top_grid", "Right_bottom_grid"):
+            try:
+                await page.locator(f"#{gid} canvas").first.click(timeout=3000)
+            except Exception:
+                continue
+            await asyncio.sleep(0.5)
+            info = await page.evaluate(_PERIOD_GRID_INFO_JS, PERIOD_GRID_KEY_COL)
+            if info.get("ok"):
+                log(f"  회차 그리드 포커스: #{gid}")
+                break
+        else:
+            log(f"  회차 그리드를 찾지 못함 (키 컬럼 '{PERIOD_GRID_KEY_COL}' 없음): {info}")
+            return None
+
+    if not info.get("items"):
+        log("  조회된 급여 회차가 0건입니다.")
+        return {"items": 0, "checked": 0}
+
+    sel = await page.evaluate(_CHECK_ALL_ROWS_JS)
+    log(f"  회차 선택: {sel['checked']}/{sel['items']}건")
+    return sel
+
+
 async def open_print_dialog(page):
-    """브라우저에서 #print 버튼 → 일괄출력 메뉴 클릭하여 PrintDialog 실행"""
+    """브라우저에서 #print → 일괄출력 메뉴 → **모달 내 [일괄출력]** → PrintDialog 실행.
+
+    ★2026-07 WEHAGO 개편★ 메뉴 클릭과 PrintDialog 사이에 웹 모달
+    '급여대장 일괄인쇄'(Canvas 미리보기)가 새로 끼어들었다. 그 모달의 [일괄출력]
+    버튼을 눌러야 비로소 Duzon PrintDialog 가 뜬다. 이 단계가 없어 아래 대기 루프가
+    항상 30초 타임아웃 → PDF 0건이 되었다(회계법인 버그 신고의 원인).
+    """
+    # ── 회차 선택 (미선택이면 모달이 "선택된 급여가 없습니다" 로 막힌다) ──
+    sel = await select_all_pay_periods(page)
+    if sel is not None and not sel.get("checked"):
+        log("  선택된 급여 회차가 없어 인쇄를 중단합니다.")
+        return False
+
     log("[PDF] #print 버튼 클릭...")
     await page.evaluate("""() => {
         const btn = document.querySelector('#print');
@@ -37,6 +104,21 @@ async def open_print_dialog(page):
 
     log("[PDF] 일괄출력 메뉴 클릭...")
     await click_menu_item(page, "일괄출력")
+
+    # ── 웹 모달 대기 → 모달 내 [일괄출력] 클릭 ────────────────────
+    log("[PDF] 일괄인쇄 모달 대기...")
+    for _ in range(int(net_mult(12))):
+        await asyncio.sleep(net_mult(1.5))
+        if await page.evaluate(_TOP_MODAL_BUTTON_RECT_JS, BULK_MODAL_PRINT_BTN):
+            break
+    else:
+        log("  일괄인쇄 모달이 열리지 않았습니다.")
+        return False
+
+    log(f"[PDF] 모달 내 [{BULK_MODAL_PRINT_BTN}] 클릭...")
+    if not await _click_modal_button(page, BULK_MODAL_PRINT_BTN):
+        log(f"  모달 [{BULK_MODAL_PRINT_BTN}] 버튼을 찾지 못했습니다.")
+        return False
 
     if sys.platform != "win32":
         log("  Windows 전용 기능입니다.")

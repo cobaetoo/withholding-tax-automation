@@ -1595,6 +1595,17 @@ async def navigate_to_swsa0101(page, year: int = None, month: int = None) -> boo
     # 구분 드롭다운 → 급여+상여
     await select_dropdown(page, 0, "급여+상여")
 
+    # ── 지급일 확보 ─────────────────────────────────────────
+    # 귀속연월만으로는 조회가 불완전하다(회차가 좁혀지지 않음). 지급일은 '구분'
+    # 선택 시 WEHAGO 가 자동으로 채우므로 그 기본값을 그대로 쓰고, 비어 있을 때만
+    # 구분 재선택으로 자동 채움을 다시 유도한다. 끝내 비면 raise(불완전 조회 차단).
+    from src.automation.wehago._swsa_calendar import ensure_swsa_pay_date
+
+    async def _refill_gubun():
+        await select_dropdown(page, 0, "급여+상여")
+
+    await ensure_swsa_pay_date(page, refill=_refill_gubun)
+
     # 복사후 재계산 모달 (조건부)
     await asyncio.sleep(1)
     has_modal = await _safe_evaluate(page, """() => {

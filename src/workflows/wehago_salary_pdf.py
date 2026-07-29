@@ -81,10 +81,18 @@ class WehagoSalaryPdfWorkflow(BaseWorkflow):
                 return False
             state.after_step(job_id, "navigate_to_swsa0101")
 
-        # ── Step 3: PDF 발급 (급여명세(사원당 한장) + 급여대장) ──────────
+        # ── Step 3: PDF 발급 (급여대장 + 급여명세(사원당 한장)) ──────────
+        # ★0건은 실패다★ — 구 구현은 PrintDialog 타임아웃으로 0건을 만들고도
+        #   True 를 반환해 "성공했는데 파일이 없는" 무증상 실패를 만들었다.
+        pdf_paths = []
         if not state.should_skip_step(job_id, "download_pdf"):
             state.before_step(job_id, "download_pdf", 3)
-            await download_multi_pdf(page, save_dir, SALARY_PDF_FORMATS)
+            pdf_paths = await download_multi_pdf(page, save_dir, SALARY_PDF_FORMATS)
+            if not pdf_paths:
+                state.fail_step(job_id, "download_pdf", "PDF 생성 0건")
+                # 모달/다이얼로그는 반드시 정리하고 실패로 종료 (다음 수임처 보호)
+                await self._cleanup_print_modals(page)
+                return False
             state.after_step(job_id, "download_pdf")
 
         # ── Step 4: 모달 정리 ─────────────────────────────────────────
