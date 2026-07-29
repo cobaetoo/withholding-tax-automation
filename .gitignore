@@ -30,6 +30,17 @@ src/automation/wehago/_nav.py
 src/automation/wehago/_close_modal.py
 src/automation/wehago/_full_run.py
 
+# GUI 기동 디버그 산출물 (프로브 스크립트/런처/크래시 로그)
+_gui_*
+_launch_gui*.vbs
+_spawn_gui*.py
+_run_gui_debug.bat
+gui_launch_error.log*
+
+# 포털 DOM/메뉴 프로브 산출물
+_wetax_*
+wetax_*_probe.json
+
 # Results
 results/
 
