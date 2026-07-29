@@ -3,7 +3,7 @@
 > **목적:** 원천징수세 자동화 프로젝트의 기술 부채·결함·로드맵을 **단일 진실표**로 통합 관리.
 > 산재해 있던 부채 관련 내용(핸드오프·도메인 PROGRESS·GUIDE 임베디드 리스크)을 한곳에서 우선순위화한다.
 >
-> **기준 시점:** 2026-07-29 · **버전:** `1.1.3` (`src/version.py`) · **HEAD:** `8dc927d`
+> **기준 시점:** 2026-07-29 · **버전:** `1.1.3` (`src/version.py`) · **HEAD:** `f0980e9`
 > **관점:** GUI 프로그램(`gui_main.py` → `MainWindow` → Workers → Workflows → Automation → Utils → Chrome CDP) 기준.
 > 코드를 수정하기 전, 본 문서의 해당 항목과 [§1 산재 문서 관계]를 함께 읽을 것.
 >
@@ -67,6 +67,7 @@
 | **TD-14** | 🟢 | ⬜ | 레거시 | `sys.path.insert(0, PROJECT_ROOT)` 남발 (**50+곳**, 패키지 코드 내부 포함) | `_*.py` · `src/automation/*/` · `tests/` | 패키지 정비 시 제거 가능 | 🔍 | 사용자 |
 | **TD-15** | 🟢 | ⬜ | 로깅 | `print()` 기반 로깅 (`logging` 미사용) — `engine.py` 26곳 | `src/batch/engine.py` 등 | 파일 로깅/레벨 제어 불가 | 🔍 | 사용자 |
 | **TD-16** | 🟢 | ⬜ | 데드코드 | `VerificationDialog` **완전 미사용** + 포털 호스트 dict 중복 (**위치는 runner**) | `src/ui/widgets/settings_dialog.py` · `src/ui/workers/automation_runner.py:746-752,832-838` | 정리 필요 | 🔍 | 사용자 |
+| **TD-18** | 🔴 | ✅ | 런타임결함 | ~~만료·미인증 상태에서 자동 업데이트 도달 불가~~ → **해결**(`f0980e9`): 만료 게이트에서 확인→다운로드→무인설치 경로 제공 | `gui_main._run_expiry_update_gate` · `updater.should_offer_expiry_update/should_install_downloaded` | 만료 시 사용자가 새 버전을 받을 자동 경로 확보 (시한 `BETA_EXPIRES=2026-12-31`) | 🔍 ⚠라이브 미검증(LV-6) | 분석 |
 | **TD-17** | 🟡 | 🟦 | 데이터결함 | 무스코프 clients DELETE 3경로 — **db+runner list 분기 해결**. main “모두 삭제”는 의도 UX 유지 | `main_window._on_delete_all_clients` | 사용자 확인 후 전체 삭제 (고지 있음) | 🔍 | 분석 |
 
 > 참고(구조 일관성): TD-02·TD-04·TD-05·TD-13·TD-17 은 모두 **러너↔엔진↔DB 실행 경로**에 묶여 있어 Wave 3(`refactoring-handoff`)에서 함께 다루는 것이 효율적이다.
@@ -114,6 +115,18 @@
   - override 스냅샷: `WHERE management_number != '' AND portal = ?`
   - DELETE: `WHERE portal = ?`
 - **검증:** `tests/test_refresh_preserve_mgmt.py::test_refresh_does_not_wipe_other_portal_clients`.
+
+---
+
+### TD-18 — 만료·미인증 상태에서 자동 업데이트 도달 불가 ✅ 해결 [런타임결함] 🔍 ⚠LV-6
+- **문제(2026-07-29 확인):** `gui_main.py` 부트 순서가 `is_beta_expired() → QMessageBox → sys.exit(1)` 이라, 자동 업데이트 확인(`MainWindow` 생성 2.5초 후)에 **도달조차 못 했다.** 만료 사용자는 "새 버전을 설치해 주세요" 안내만 받는데, 정작 그 새 버전을 받을 유일한 자동 경로가 그 시점에 닫힌다. 로그인 실패/취소도 동일. 출처: `docs/refactoring-handoff.md:179` "자동업데이트 인증게이트 전 확인".
+- **해결(`f0980e9`):** 만료 분기에서 `_run_expiry_update_gate()` 를 먼저 밟는다(A안 = 진행률 포함 최소 구현).
+  - `updater.should_offer_expiry_update(res)` — **skip_version/deferred 를 의도적으로 무시**. 만료 상태에선 업데이트가 유일한 탈출구이므로 과거에 '건너뛰기' 한 버전도 제안해야 한다.
+  - `updater.should_install_downloaded(path, canceled)` — `download_installer` 는 read 루프에서만 취소를 감지해 마지막 청크 이후(sha256·검증·`os.replace`) 취소는 정상 경로를 반환한다. 호출부가 취소 플래그를 함께 봐야 거부한 설치가 진행되지 않는다.
+  - **네트워크 불가/최신 없음은 현행 동작 보존** — 기존 만료 안내 문구 그대로 띄우고 종료(정책 결정).
+- **★함정(회귀 주의):** `QProgressDialog` 는 **`closeEvent` 에서도 `canceled` 를 emit** 한다. 정리 단계의 `prog.close()` 가 취소 핸들러를 불러 '정상 완료'를 취소로 뒤집으면 **설치가 영구 차단**된다(= 자동 업데이트 무력화). `close()` **전에** `canceled.disconnect()` 필수. 순수 함수 테스트는 이 상태에서도 전부 green 이었다 — `tests/test_expiry_gate_qt.py`(offscreen)가 회귀를 고정한다.
+- **부수 방어:** 확인 루프 20초 워치독(DNS 는 `timeout=6` 에 걸리지 않음), 살아있는 `QThread` GC 시 `Destroyed while thread is still running`→abort 방지(`_ORPHANED_WORKERS` + 고아 잔존 시 `os._exit(1)`), 시그널 `Qt.QueuedConnection` 명시.
+- **검증:** `tests/test_update_expiry_gate.py`(순수 33) + `tests/test_expiry_gate_qt.py`(Qt 4). 전체 263 passed. **단 frozen 빌드에서만 동작하므로 실기기 미검증 → LV-6.**
 
 ---
 
@@ -175,6 +188,7 @@
 | **LV-3** | EI v3 조정분(adjustment==0 → 0.9% 보존 자동산정) | `src/utils/data_merger.py:330-366` | 🟦 **부분 해소 가능** — `cfb501c`(2026-07-19) 가 라이브 실측으로 부호규칙을 정정했고 docstring 이 이를 명시. 단 `adjustment==0` 분기 자체가 그 테스트에 포함됐는지는 미확인 |
 | **LV-4** | 병렬 영속 프로필(빈 프로필 → 보안프로그램 재설치 오탐 해결) | `src/utils/chrome_cdp.py:307-336` | 구현 완료, 라이브 대기. docstring 은 설계 근거만 기술(검증 기록 아님) |
 | **LV-5** | 병렬 → WEHAGO 급여자료입력 E2E(공단EDI raw → SWSA 반영) | `src/workflows/wehago_swsa.py:207-227` | 마지막 관련 수정 `594ad22`(2026-07-05)는 버그픽스이지 E2E 확인이 아님. handoff §16.3 권장 |
+| **LV-6** | **만료 게이트 자동 업데이트 빌드 스모크**(TD-18) | `gui_main._run_expiry_update_gate` | 게이트가 `sys.frozen` 에서만 동작 → dev 실행으로는 경로 자체가 안 탄다. **절차:** ①`BETA_EXPIRES` 과거 날짜로 조작한 **테스트 전용 빌드**(배포 금지, 검증 후 원복) ②설치·실행 시 만료 안내 대신 "새 버전 v… 설치하시겠습니까?" 표시 ③지금 업데이트→진행률→종료→무인설치→**자동 재실행** ④취소 시 창 유지 + 만료 안내(F1) ⑤랜선 분리 시 **20초 내** 만료 안내(F3 워치독) ⑥`%LOCALAPPDATA%\원천징수자동화-data\logs\update.log` 에 `expiry-gate:` 기록 대조. ③④는 `tools/verify_auto_update.py` 로 자동화 가능, ②⑤는 수동. **LV-2 와 같은 빌드 사이클에서 함께 소화할 것** |
 
 ---
 
@@ -188,7 +202,10 @@
 6. **TD-09** — auth_config 상수 이동 (역참조 해소)
 7. **TD-12** — 문서 폐기/병합 정리 (포트 오기 2곳부터: hometax PROGRESS·wehago guide)
 8. **TD-11 / TD-14 / TD-15 / TD-16** — LOW 정리. TD-11 은 post-build DLL 제거 스크립트 필요(exclude 로는 불가).
-9. **LV-1 ~ LV-5** — 출하 전 라이브 스모크 (부채 아님, 게이트). **LV-2 는 무서명 출하가 계속되는 한 상시 리스크.**
+9. **LV-1 ~ LV-6** — 출하 전 라이브 스모크 (부채 아님, 게이트). **LV-2 는 무서명 출하가 계속되는 한 상시 리스크. LV-6 은 다음 릴리스 빌드 사이클에 LV-2 와 묶어 수행 합의(2026-07-29).**
+
+> **자동 업데이트 관련 항목 색인**(흩어져 있어 함께 봐야 함): **TD-18**(만료 게이트, ✅) · **LV-6**(그 빌드 스모크) · **LV-2**(Defender 오탐 — 차단 시 무인설치 실패) · **TD-01**(`version.json` 해시 정합성, ✅) · **TD-11**(번들 383MB = 업데이트 다운로드 용량).
+> **★코드 밖 선행 조건:** v1.1.1 이하 설치본은 무인설치 래퍼 결함이 내장돼 **자기 힘으로 못 올라온다** → 해당 PC는 v1.1.2+ **수동 1회 설치** 필요. 이게 끝나지 않으면 TD-18 을 포함한 어떤 개선도 그 PC에 도달하지 않는다.
 
 ---
 
@@ -198,6 +215,7 @@
 |---|---|---|
 | 2026-07-16 | `ad483f8` | 최초 작성 (v1.0.3 기준, TD-01~16 + LV-1~5) |
 | 2026-07-20 | `3202b50` | **전 항목 코드 재검증 후 갱신 (v1.0.5 기준)** — 아래 참조 |
+| 2026-07-29 | `f0980e9` | **TD-18 신규 ✅ + LV-6 신규.** 만료 게이트 자동 업데이트 경로 구현(A안). 적대적 리뷰로 결함 3건(취소 시 무창 종료·취소 무시 설치·확인 모달 무한대기) 수정, 이후 독립 스모크로 `prog.close()` 의 `canceled` 재emit 회귀를 추가 발견·수정. Qt 게이트 테스트 신설(offscreen 4). 전체 263 passed. 실기기 검증은 LV-6 로 이월 |
 | 2026-07-29 | `8dc927d` | **기준 시점 갱신(항목 변동 없음).** `6484692` 이후 소스 변경은 PR #10 `src/automation/wehago/_common.py`(신고주기 태그 부분일치 폴백) **1파일뿐**이며 TD 어느 항목의 대상 파일도 아니다 → 미해결 15건 상태·줄번호 그대로 유효. 그 외 변경은 문서(GUIDE/handoff/본 문서)와 `.gitignore` 정리. **⚠ 전 항목 재검증은 하지 않음** — 마지막 전수 재검증은 2026-07-20(`3202b50`) |
 | 2026-07-25 | `6484692` | **옵션 A 완료·세션 마무리.** TD-05·TD-10·TD-02 ✅, TD-17 🟦. 커밋 `fix(batch): TD-05/17/02/10…`. 위택스 제출·안전 리팩터(`8d7ad5d`/`d024177`)는 구조 부채 외 완료. **Wave 3(옵션 B) 보류** — 위험·골든 선행은 handoff §0/§3 및 아래 “옵션 B 위험” 참고. |
 
