@@ -475,6 +475,7 @@ def build_installer():
 def stage_protected(base_dir):
     """소스 보호 스테이징: compile_protected → verify_staging 순차 실행 후 manifest 반환.
 
+    verify_staging 은 import/registry/coroutine 스모크만 한다(pytest 미실행).
     둘 중 하나라도 실패하면 빌드를 중단한다(부분 성공 번들 금지).
     """
     tools = os.path.join(base_dir, "tools")
@@ -485,7 +486,7 @@ def stage_protected(base_dir):
         print("\n[ERROR] 소스 보호 컴파일 실패 — 빌드 중단")
         sys.exit(1)
 
-    print("\n[0.5/3] 스테이징 런타임 등가성 검증...")
+    print("\n[0.5/3] 스테이징 런타임 스모크(import/registry/coroutine)...")
     r = subprocess.run([sys.executable, os.path.join(tools, "verify_staging.py")],
                        cwd=base_dir)
     if r.returncode != 0:

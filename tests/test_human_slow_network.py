@@ -8,10 +8,13 @@
 5. ms 타임아웃용 int(net_mult(15000)) 정수 변환.
 
 test_human_no_delay.py 와 동일한 reload 패턴. 순수 단위테스트(Playwright/PySide6 미의존).
+Cython 스테이징에서는 reload 불가 → 소스 CI 전용(reload_only).
 """
 import importlib
 
 import pytest
+
+pytestmark = pytest.mark.reload_only
 
 
 def _reload_human(monkeypatch, slow_value, no_delay_value=None):

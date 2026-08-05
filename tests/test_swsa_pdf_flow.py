@@ -29,6 +29,7 @@ from src.automation.wehago import _swsa_calendar as CAL
 # 1~2. 모달 중간 단계 + 회차 선택
 # ─────────────────────────────────────────────────────────────────
 
+@pytest.mark.source_only
 def test_open_print_dialog_clicks_modal_print_button():
     """메뉴 클릭만으로 끝내면 PrintDialog 가 뜨지 않는다(버그 회귀 방지)."""
     src = inspect.getsource(P.open_print_dialog)
@@ -44,6 +45,7 @@ def test_modal_print_button_label():
     assert C.BULK_MODAL_TITLE == "급여대장 일괄인쇄"
 
 
+@pytest.mark.source_only
 def test_open_print_dialog_selects_periods_first():
     """회차 미선택이면 모달이 '선택된 급여가 없습니다'로 막힌다."""
     src = inspect.getsource(P.open_print_dialog)
@@ -89,6 +91,7 @@ def test_period_grid_validated_by_key_column():
     assert "wrong-grid" in C._PERIOD_GRID_INFO_JS
 
 
+@pytest.mark.source_only
 def test_period_grid_falls_back_to_container_focus():
     """엉뚱한 그리드가 활성이면 컨테이너를 순회해 포커스를 옮긴다."""
     src = inspect.getsource(P.select_all_pay_periods)
@@ -100,6 +103,7 @@ def test_period_grid_falls_back_to_container_focus():
 # 4. 해상도 무관
 # ─────────────────────────────────────────────────────────────────
 
+@pytest.mark.source_only
 def test_web_click_uses_live_element_rect():
     assert "getBoundingClientRect" in C._TOP_MODAL_BUTTON_RECT_JS
     assert "r.left + r.width / 2" in C._TOP_MODAL_BUTTON_RECT_JS
@@ -108,6 +112,7 @@ def test_web_click_uses_live_element_rect():
     assert 'rect["x"]' in src and 'rect["y"]' in src
 
 
+@pytest.mark.source_only
 def test_winforms_access_is_non_positional():
     """PrintDialog 조작은 auto_id 기반이어야 한다(보조 모니터 대응)."""
     src = inspect.getsource(P)
@@ -195,6 +200,7 @@ def test_workflow_succeeds_when_pdf_created(monkeypatch, tmp_path):
 # 6~7. 검색영역 / 지급일
 # ─────────────────────────────────────────────────────────────────
 
+@pytest.mark.source_only
 def test_calendar_opener_is_title_based_not_positional():
     src = inspect.getsource(CAL)
     code_lines = [
@@ -241,6 +247,7 @@ def test_pay_date_raises_when_unrecoverable():
         asyncio.run(CAL.ensure_swsa_pay_date(_FakePage(["", "", ""]), refill=refill))
 
 
+@pytest.mark.source_only
 def test_navigate_sets_pay_date_after_gubun():
     """지급일은 '구분' 선택 뒤에 확보해야 한다(구분 선택이 자동 채움 트리거)."""
     from src.automation.wehago import _common

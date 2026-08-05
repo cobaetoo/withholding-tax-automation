@@ -1,6 +1,8 @@
 """settings_store.py 영속 저장 회귀테스트 (APP_DATA_DIR/app_settings.json).
 
 실제 APP_DATA_DIR 대신 tmp_path 로 격리 — 느린 네트워크 설정의 저장/로드/영속성 검증.
+
+reload 의존 케이스는 Cython 스테이징에서 의미 없음 → reload_only.
 """
 import importlib
 
@@ -29,6 +31,7 @@ def test_slow_network_roundtrip(store):
     assert store.get_slow_network() is False
 
 
+@pytest.mark.reload_only
 def test_slow_network_persists_to_disk(store, tmp_path):
     """get_slow_network()가 매번 디스크에서 읽음(캐시 아님) → 파일 영속성 보장."""
     store.set_slow_network_flag(True)

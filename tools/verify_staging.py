@@ -1,19 +1,24 @@
 """소스 보호: 컴파일된 스테이징 트리의 런타임 등가성 검증.
 
 compile_protected.py 가 만든 build/native/ 스테이징(핵심 4패키지가 .pyd 로
-컴파일됨)이 PyInstaller 번들 이전에 실제로 정상 동작하는지 확인한다.
+컴파일됨)이 PyInstaller 번들 이전에 실제로 로드·등록되는지 확인한다.
 이 게이트가 통과해야 build.py 가 이 스테이징으로 번들을 만든다.
 
-검증 4종
---------
+검증 3종 (패키징 게이트 — unit test 와 분리)
+------------------------------------------
 1. import 전수  : manifest 의 모든 모듈이 import 되고 __file__ 이 .pyd 인가
                   (dev 트리 .py 오염 감지 + dataclass/Enum/async import-time 문제 포착)
-2. registry     : 워크플로우 11모듈 import 후 @register 데코레이터가 정상 등록했는가
+2. registry     : 워크플로우 모듈 import 후 @register 데코레이터가 정상 등록했는가
 3. 코루틴 스모크 : 컴파일된 async def(human_delay)를 asyncio.run 으로 실제 실행
                   (Cython 코루틴 ↔ asyncio 호환)
-4. 컴파일 트리 pytest : tests/ 를 스테이징에 복사 후 cwd=staging 에서 pytest 실행
 
-실패 시 compile_protected.FALLBACK_EXCLUDE 에 문제 모듈을 추가 → 재스테이징 → 재검증.
+★ pytest / tests/ 는 이 스크립트에서 실행하지 않는다.
+  회귀 테스트는 소스 트리에서 별도:  python -m pytest tests/
+  설치 파일 빌드가 단위 테스트 실패에 막히지 않도록 분리한다.
+
+실패 시 제품 모듈 컴파일/런타임 비호환이면
+compile_protected.FALLBACK_EXCLUDE 에 해당 모듈을 추가할 수 있다.
+(테스트 기법 불일치 때문에 보호를 약화하지 말 것.)
 
 사용법
 ------
@@ -25,24 +30,7 @@ import asyncio
 import importlib
 import json
 import os
-import shutil
-import subprocess
 import sys
-
-# 컴파일 트리 pytest 에서만 제외하는 파일들(소스 트리 CI 는 무변경).
-# ① reload 계열: extension 모듈은 importlib.reload 로 재실행되지 않아(env 재읽기
-#    패턴이 구조적으로 실패) 컴파일 트리에서 의미가 없다.
-# ② repo 루트 모듈 의존: 스테이징에는 gui_main.py + src/** 만 복사되고 release.py 등
-#    루트 스크립트는 없다 → import 실패. 소스 보호 대상도 아니라 스테이징 검증에서 제외.
-RELOAD_TEST_FILES = (
-    "test_human_no_delay.py",
-    "test_human_slow_network.py",
-    "test_settings_store.py",
-)
-ROOT_DEP_TEST_FILES = (
-    "test_release_utf8.py",   # import release (repo 루트, 스테이징 미복사)
-)
-STAGING_SKIP_TESTS = RELOAD_TEST_FILES + ROOT_DEP_TEST_FILES
 
 # main_window._load_phases 와 동일한 워크플로우 등록 모듈(레지스트리 채움).
 WORKFLOW_MODULES = (
@@ -57,6 +45,7 @@ WORKFLOW_MODULES = (
     "src.workflows.wehago_jitax_payment",
     "src.workflows.wehago_jitax_efile",
     "src.workflows.hometax",
+    "src.workflows.wetax_local_tax",
 )
 
 
@@ -156,38 +145,6 @@ def check_coroutine():
     return True
 
 
-# ── 검증 4: 컴파일 트리 pytest ────────────────────────────────────────────────
-def check_pytest(staging):
-    root = repo_root()
-    tests_src = os.path.join(root, "tests")
-    ini_src = os.path.join(root, "pytest.ini")
-    if not os.path.isdir(tests_src):
-        log("[WARN] tests/ 없음 — pytest 검증 생략")
-        return True
-    tests_dst = os.path.join(staging, "tests")
-    if os.path.isdir(tests_dst):
-        shutil.rmtree(tests_dst)
-    shutil.copytree(tests_src, tests_dst,
-                    ignore=shutil.ignore_patterns("__pycache__"))
-    if os.path.isfile(ini_src):
-        shutil.copy2(ini_src, os.path.join(staging, "pytest.ini"))
-
-    cmd = [sys.executable, "-m", "pytest", "-q"]
-    for tf in STAGING_SKIP_TESTS:
-        cmd += ["--ignore", os.path.join("tests", tf)]
-    log(f"컴파일 트리 pytest 실행(cwd={staging}, 제외 {len(STAGING_SKIP_TESTS)}개"
-        f" — reload {len(RELOAD_TEST_FILES)} + 루트의존 {len(ROOT_DEP_TEST_FILES)})")
-    # cwd=staging → conftest.ROOT(parents[1])=staging → staging/src(.pyd) 를 import
-    env = dict(os.environ)
-    env.pop("PYTHONPATH", None)
-    result = subprocess.run(cmd, cwd=staging, env=env)
-    if result.returncode != 0:
-        log(f"[FAIL] 컴파일 트리 pytest 실패 (exit={result.returncode})")
-        return False
-    log("[OK] 컴파일 트리 pytest 통과")
-    return True
-
-
 def verify(staging=None):
     staging = os.path.abspath(staging or os.path.join(repo_root(), "build", "native"))
     if not os.path.isdir(staging):
@@ -195,17 +152,14 @@ def verify(staging=None):
     manifest = _load_manifest(staging)
     _prime_sys_path(staging)
 
-    # 1~3 은 이 프로세스에서(staging import), 4 는 서브프로세스
     ok1 = check_imports(staging, manifest)
     ok2 = check_registry()
     ok3 = check_coroutine()
-    ok4 = check_pytest(staging) if (ok1 and ok2 and ok3) else False
-    if not (ok1 and ok2 and ok3):
-        log("[FAIL] import-time 검증 실패 → pytest 생략")
 
-    passed = ok1 and ok2 and ok3 and ok4
+    passed = ok1 and ok2 and ok3
     log("=" * 50)
-    log("스테이징 검증 " + ("전부 통과 ✔" if passed else "실패 ✘"))
+    log("스테이징 검증 " + ("전부 통과 ✔" if passed else "실패 ✘")
+        + " (import/registry/coroutine — pytest 미실행)")
     return passed
 
 

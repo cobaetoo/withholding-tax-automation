@@ -4,13 +4,19 @@
 gh 업로드 직전에 죽어 공개된 적이 없음 (deploy.sh 는 PYTHONUTF8=1 을 export 하지만
 release.py 수동 실행 경로가 무방비였다). release.py 는 import 시점에 stdout/stderr 를
 utf-8(errors=replace) 로 reconfigure 해 스스로 방어해야 한다.
+
+스테이징(build/native)에는 release.py 가 복사되지 않으므로 root_only.
 """
 import os
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
+
+pytestmark = pytest.mark.root_only
 
 
 def test_release_import_survives_cp949_console():

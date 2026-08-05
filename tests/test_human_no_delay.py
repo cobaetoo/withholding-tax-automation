@@ -8,12 +8,17 @@
 
 pytest.ini 의 pythonpath=. 와 conftest.py 의 sys.path 주입을 그대로 사용.
 Playwright/PySide6 미의존 순수 단위테스트.
+
+Cython 스테이징: importlib.reload 로 import-time env bake 를 재평가할 수 없어
+소스 CI 전용(reload_only). 보호 빌드 게이트에서는 제외된다.
 """
 import asyncio
 import importlib
 import time
 
 import pytest
+
+pytestmark = pytest.mark.reload_only
 
 
 def _reload_human(monkeypatch, no_delay_value):

@@ -31,7 +31,7 @@ build/native/ 스테이징 트리에서 Cython 으로 .pyd 로 컴파일하고 �
 
 빌드 PC 전제: Visual Studio 2022 Build Tools(VC 워크로드) + Cython>=3.0
 build.py 가 이 스크립트를 서브프로세스로 호출하며, 이어서 verify_staging.py 로
-런타임 등가성을 검증한다.
+import/registry/coroutine 스모크를 검증한다(pytest 는 실행하지 않음).
 """
 
 import json

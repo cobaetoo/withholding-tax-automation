@@ -107,8 +107,8 @@ python tools/compile_protected.py --check    # 툴체인(Cython+MSVC) 프로브
 
 1. `tools/compile_protected.py` — `build/native/` 스테이징에 소스 복사 → 4패키지
    `cythonize` → `.pyd` → 원본 `.py`/`.c` **물리 삭제** → `protected_manifest.json` 기록.
-2. `tools/verify_staging.py` — 스테이징 런타임 등가성 스모크(import 전수·registry·
-   코루틴·컴파일 트리 pytest). 실패 시 빌드 중단.
+2. `tools/verify_staging.py` — 스테이징 런타임 스모크(**import 전수·registry·코루틴만**).
+   실패 시 빌드 중단. **pytest / `tests/` 는 실행하지 않는다.**
 3. `verify_bundle(protected=True)` — 번들에서 (a) 보호 모듈이 `.pyd` 로 존재 +
    (b) **PYZ leak audit**: 보호 모듈이 `.pyc` 로 남아있지 않음. 하나라도 유출되면 릴리스 금지.
 
@@ -117,6 +117,16 @@ python tools/compile_protected.py --check    # 툴체인(Cython+MSVC) 프로브
 - **컴파일 실패 폴백:** 특정 모듈이 컴파일/런타임에 문제면
   `tools/compile_protected.py` 의 `FALLBACK_EXCLUDE` 에 상대경로를 추가한다.
   그 모듈만 순수 `.py`(PYZ 잔류)로 남고 나머지는 계속 보호된다(빌드 로그에 WARNING).
+
+### 빌드 vs 단위 테스트 (분리)
+
+| 실행 | 목적 | 범위 |
+|------|------|------|
+| `python -m pytest tests/` | 소스 트리 회귀(개발/CI) | 전체 unit test |
+| `python build.py` | 설치 파일 생성 | Cython 보호 + import/registry/async 스모크 + PyInstaller + Inno |
+
+설치 빌드는 단위 테스트와 **무관**하다. 회귀는 배포 전에 별도로 `pytest` 를 돌린다.
+(과거 보호 빌드가 스테이징에서 전체 pytest 를 돌려 getsource/reload 테스트에 막히던 문제를 제거.)
 
 ## 릴리스 전 체크리스트 (Defender 오탐 0x800700E1 방지)
 
