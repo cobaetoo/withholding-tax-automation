@@ -605,3 +605,9 @@ CDP 포트가 열린 시점만 성공으로 판단해, 포털 보안모듈·공�
 - pytest 전체 통과 (lifecycle / parallel bootstrap / NHIS preview URL 포함).
 - **라이브:** 선택건 1건·2건 병렬에서 건강보험 PDF 포함 3기관 자료 정상 다운로드 확인(2026-08-06).
 - GUI 는 탐색기에서 `run_gui.bat` 더블클릭 권장(에이전트/IDE Job 기동 시 강제 종료 가능).
+
+### 18.5 후속 리팩터링 (코드 미착수)
+
+안정화 직후 구조 개선 후보·금지구역·Wave 순서는  
+**[parallel-edi-refactoring-backlog.md](parallel-edi-refactoring-backlog.md)** 에만 정리한다.  
+기능 코드 리팩터는 해당 문서 Wave 단위로 **별도 PR**에서 진행한다.
