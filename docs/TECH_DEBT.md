@@ -3,7 +3,7 @@
 > **목적:** 원천징수세 자동화 프로젝트의 기술 부채·결함·로드맵을 **단일 진실표**로 통합 관리.
 > 산재해 있던 부채 관련 내용(핸드오프·도메인 PROGRESS·GUIDE 임베디드 리스크)을 한곳에서 우선순위화한다.
 >
-> **기준 시점:** 2026-07-29 · **버전:** `1.1.3` (`src/version.py`) · **HEAD:** `5198a37`
+> **기준 시점:** 2026-08-06 · **버전:** `1.1.3` (`src/version.py`)
 > **관점:** GUI 프로그램(`gui_main.py` → `MainWindow` → Workers → Workflows → Automation → Utils → Chrome CDP) 기준.
 > 코드를 수정하기 전, 본 문서의 해당 항목과 [§1 산재 문서 관계]를 함께 읽을 것.
 >
@@ -39,7 +39,8 @@
 | 기존 문서 | 본 레지스터와의 관계 |
 |---|---|
 | `docs/refactoring-handoff.md` | **Wave 3**(engine↔runner)·**Wave 4**(메뉴정리). TD-02/05 데이터 결함은 2026-07-25 선조치됨 — Wave 3 본체는 여전히 **TD-04 / TD-13**. 골든 스냅샷 기법은 handoff가 원천. |
-| `docs/parallel-automation-handoff.md` | 병렬 안정화·open items. 본 문서 **TD-07 / LV-4 / LV-5** 참조. |
+| `docs/parallel-automation-handoff.md` | 병렬 안정화 이력·open items. 본 문서 **TD-07 / LV-4 / LV-5** 참조. |
+| `docs/parallel-first-run-investigation.md` | 신규 병렬 프로필의 보안모듈/주소창 없는 팝업 문제 조사·수정·테스트 기록. **LV-4**의 최신 세부 근거. |
 | `src/automation/wehago/PROGRESS.md` | 도메인 진행 + `## 다음 단계 TODO`(대부분 MVP 시절, 상당수 완료). 미완료만 **LV-5**로 인용. |
 | `src/automation/hometax/PROGRESS.md` | 제출 플로우 완료·라이브 검증(2026-07-17). **Phase 10 `enabled=True`**. 남은 TODO: 접수증 저장·신고내역 다운로드. ⚠ 포트 `9222` 오기 — TD-12. |
 | `src/automation/wetax/PROGRESS.md` | Phase 13 제출·다건·안전 가드 **완료**(2026-07-25). 구조 부채 아님. 제품 잔여: 오류 N건 정책·일괄목록/접수번호. |
@@ -186,7 +187,7 @@
 | **LV-1** | NPS 국고지원금 col24 분기 등가 가정(통합엑셀 경로 vs 구 govt 엑셀 //2) | `src/utils/data_merger.py:301-327` | 수식 col10+col16−col24. 마지막 실질 수정 `b5e488b`(2026-06-14) — 이후 라이브 확인 근거 없음 |
 | **LV-2** | Defender 무서명 빌드 스모크 1·2단계 (0x800700E1 오탐 회귀) | `build.py:247-` `verify_bundle()` | ⚠ `verify_bundle()` 은 **정적 번들 완전성 검사일 뿐** 실기기 Defender 스모크가 아님. 실기기 게이트는 여전히 수동·미코드화. v1.0.5 도 무서명·무스캔 출하됨. ★소스 보호(Cython) 도입으로 `_internal/src` 에 **.pyd 65개 추가**→"느슨한 네이티브 바이너리" 휴리스틱 표면 증가. 첫 보호 릴리스는 VT+실기기 Defender 풀스캔 필수(`RELEASE.md` 소스 보호 섹션 참조) |
 | **LV-3** | EI v3 조정분(adjustment==0 → 0.9% 보존 자동산정) | `src/utils/data_merger.py:330-366` | 🟦 **부분 해소 가능** — `cfb501c`(2026-07-19) 가 라이브 실측으로 부호규칙을 정정했고 docstring 이 이를 명시. 단 `adjustment==0` 분기 자체가 그 테스트에 포함됐는지는 미확인 |
-| **LV-4** | 병렬 영속 프로필(빈 프로필 → 보안프로그램 재설치 오탐 해결) | `src/utils/chrome_cdp.py:307-336` | 구현 완료, 라이브 대기. docstring 은 설계 근거만 기술(검증 기록 아님) |
+| **LV-4** | 병렬 신규 프로필 최초 실행(보안프로그램/주소창 없는 팝업) | `ParallelCliRunner`, `chrome_cdp` | 순차 bootstrap·준비 마커·포털 탭 선택·CDP 단절 실패 처리를 구현하고 자동 회귀·보호 빌드까지 통과. 새 설치 환경의 실제 보안모듈 스모크는 대기 — [조사 기록](parallel-first-run-investigation.md) 참조. |
 | **LV-5** | 병렬 → WEHAGO 급여자료입력 E2E(공단EDI raw → SWSA 반영) | `src/workflows/wehago_swsa.py:207-227` | 마지막 관련 수정 `594ad22`(2026-07-05)는 버그픽스이지 E2E 확인이 아님. handoff §16.3 권장 |
 | **LV-6** | **만료 게이트 자동 업데이트 빌드 스모크**(TD-18) | `gui_main._run_expiry_update_gate` | 게이트가 `sys.frozen` 에서만 동작 → dev 실행으로는 경로 자체가 안 탄다. **절차:** ①`BETA_EXPIRES` 과거 날짜로 조작한 **테스트 전용 빌드**(배포 금지, 검증 후 원복) ②설치·실행 시 만료 안내 대신 "새 버전 v… 설치하시겠습니까?" 표시 ③지금 업데이트→진행률→종료→무인설치→**자동 재실행** ④취소 시 창 유지 + 만료 안내(F1) ⑤랜선 분리 시 **20초 내** 만료 안내(F3 워치독) ⑥`%LOCALAPPDATA%\원천징수자동화-data\logs\update.log` 에 `expiry-gate:` 기록 대조. ③④는 `tools/verify_auto_update.py` 로 자동화 가능, ②⑤는 수동. **LV-2 와 같은 빌드 사이클에서 함께 소화할 것** |
 

@@ -24,7 +24,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 from playwright.async_api import async_playwright
-from src.utils.chrome_cdp import launch_chrome, connect_page as cdp_connect
+from src.utils.chrome_cdp import CDP_PORT, launch_chrome, mark_parallel_profile_ready
 
 # 저장 최상위 폴더명(site_name). CLI --save-site 로 오버라이드 — 병렬 실행 시
 # 공통 폴더("공단EDI")로 묶음. 미지정 시 "고용보험"
@@ -39,7 +39,7 @@ from src.automation.comwel._common import (
     log, COMWEL_URL, connect_page, wait_for_login,
     switch_workplace, select_workplace, reset_workplace_page,
     navigate_to_premium_20209, set_period, search_main, dismiss_dialogs,
-    PAGE_LOAD_TIMEOUT_MS,
+    PAGE_LOAD_TIMEOUT_MS, wait_for_edi_ready,
 )
 from src.automation.comwel._download import (
     download_support_info_printout,
@@ -258,17 +258,17 @@ async def main(args=None):
     result = launch_chrome(url=COMWEL_URL)
     if not result["success"]:
         log(f"ERROR: {result['error']}")
-        return
+        return False
     if result.get("reused"):
         log("  기존 Chrome에 연결")
 
     async with async_playwright() as p:
         log("[2/3] Chrome 연결 + 로그인 대기...")
         try:
-            browser, context, page = await cdp_connect(p)
+            browser, context, page = await connect_page(p)
         except Exception as e:
             log(f"ERROR: Chrome 연결 실패 - {e}")
-            return
+            return False
 
         # viewport 1920x1080 설정 — 근로복지공단 사이트는 반응형 헤더를 사용하여
         # viewport가 작으면 GNB 메뉴가 display:none 으로 숨겨짐 (라이브 검증).
@@ -278,13 +278,34 @@ async def main(args=None):
         except Exception:
             pass
 
-        await page.goto(COMWEL_URL, wait_until="domcontentloaded",
-                        timeout=PAGE_LOAD_TIMEOUT_MS)
+        # bootstrap이 이미 준비한 포털 탭은 재로딩하지 않는다. 새 일반 탭일 때만
+        # 이동해 보안모듈/로그인 세션을 다시 초기화하는 일을 피한다.
+        if "total.comwel.or.kr" not in page.url:
+            await page.goto(
+                COMWEL_URL,
+                wait_until="domcontentloaded",
+                timeout=PAGE_LOAD_TIMEOUT_MS,
+            )
         await page.bring_to_front()
 
         if not await wait_for_login(page):
             log("로그인 실패")
-            return
+            return False
+
+        if getattr(args, "bootstrap_only", False):
+            await _safe_dismiss(page)
+            if not await wait_for_edi_ready(page):
+                log("ERROR: 최초 준비 실패 — 고용보험 대시보드가 완전히 열리지 않았습니다.")
+                return False
+            try:
+                mark_parallel_profile_ready(CDP_PORT, "comwel")
+            except Exception as e:
+                log(f"ERROR: 최초 준비 상태를 저장하지 못했습니다: {e}")
+                return False
+            from src.automation._parallel_report import emit_bootstrap_ready
+            emit_bootstrap_ready()
+            log("최초 보안/로그인 준비 완료. 병렬 업무 시작을 기다립니다.")
+            return True
 
         log("로그인 확인됨. 자동화 시작.\n")
 
@@ -314,6 +335,8 @@ def _parse_args():
     import argparse
     p = argparse.ArgumentParser(description="근로복지공단(고용보험) EDI 자동화")
     p.add_argument("--auto", action="store_true", help="비대화형 일괄 실행")
+    p.add_argument("--bootstrap-only", action="store_true",
+                   help="최초 보안/로그인 준비만 수행하고 업무 배치는 시작하지 않음")
     p.add_argument("--year", type=int, default=None)
     p.add_argument("--month", type=int, default=None)
     p.add_argument("--firms", type=str, default=None,
@@ -330,4 +353,9 @@ if __name__ == "__main__":
         import io
         sys.stdout = io.TextIOWrapper(sys.stdout.detach(), encoding='utf-8')
         sys.stderr = io.TextIOWrapper(sys.stderr.detach(), encoding='utf-8')
-    asyncio.run(main(_parse_args()))
+    try:
+        result = asyncio.run(main(_parse_args()))
+    except Exception as e:
+        print(f"\nFATAL ERROR: {e}")
+        raise SystemExit(1)
+    raise SystemExit(1 if result is False else 0)

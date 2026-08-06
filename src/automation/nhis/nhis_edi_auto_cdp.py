@@ -16,7 +16,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 from playwright.async_api import async_playwright
-from src.utils.chrome_cdp import launch_chrome, connect_page as cdp_connect
+from src.utils.chrome_cdp import CDP_PORT, launch_chrome, mark_parallel_profile_ready
 from src.automation.nhis._common_edi import (
     log, NHIS_EDI_URL, NHIS_EDI_MAIN,
     connect_page, wait_for_login, close_popups,
@@ -279,7 +279,10 @@ async def _current_firm_name(page):
         return None
 
 
-from src.automation._parallel_report import emit_summary as _emit_summary
+from src.automation._parallel_report import (
+    emit_bootstrap_ready,
+    emit_summary as _emit_summary,
+)
 
 
 async def run_auto_batch(page, context, *, firms, year, month, mgmts=None):
@@ -397,7 +400,7 @@ async def main(args=None):
     result = launch_chrome(url=NHIS_EDI_URL)
     if not result["success"]:
         log(f"ERROR: {result['error']}")
-        return
+        return False
     if result.get("reused"):
         log("  기존 Chrome에 연결")
 
@@ -407,7 +410,7 @@ async def main(args=None):
             browser, context, page = await connect_page(p)
         except Exception as e:
             log(f"ERROR: Chrome 연결 실패 - {e}")
-            return
+            return False
 
         # 이미 NHIS EDI 페이지면 재로딩하지 않음 (팝업 재생성 방지)
         # 빈 프로필(병렬) 첫 로딩이 느릴 수 있어 timeout 연장 + 재시도.
@@ -421,19 +424,25 @@ async def main(args=None):
                     await asyncio.sleep(3)
             else:
                 log("ERROR: NHIS 페이지 로딩 실패")
-                return
+                return False
 
         # 팝업 먼저 닫기 — popup 탭이 pages[0]일 수 있어 로그인 인식 방해
-        page = await close_popups(context)
+        page = await close_popups(context, preferred_page=page)
+        if page is None:
+            log("ERROR: 건강보험 EDI 작업 탭을 찾을 수 없습니다.")
+            return False
         await page.bring_to_front()
 
         if not await wait_for_login(page):
             log("로그인 실패")
-            return
+            return False
 
         # 로그인이 새 탭에서 완료됐을 수 있어 메인(retrieveMain) 탭으로 재해석
         # + 잔여 팝업/공지 정리. 이후 워크플로우가 올바른 페이지에서 동작.
         page = await close_popups(context)
+        if page is None:
+            log("ERROR: 로그인 후 건강보험 EDI 메인 탭을 찾을 수 없습니다.")
+            return False
         try:
             await page.bring_to_front()
         except Exception:
@@ -443,7 +452,20 @@ async def main(args=None):
         # 뜰 때까지 한 번 안정화. (안 하면 첫 1~2 수임처가 'context destroyed'/
         # 버튼 미발견으로 실패하고 안정된 뒤 건만 성공.)
         log("  메인 페이지 준비 대기...")
-        if await wait_firm_selector_ready(page, context):
+        main_ready = await wait_firm_selector_ready(page, context)
+        if getattr(args, "bootstrap_only", False):
+            if not main_ready:
+                log("ERROR: 최초 준비 실패 — 건강보험 메인 화면이 완전히 열리지 않았습니다.")
+                return False
+            try:
+                mark_parallel_profile_ready(CDP_PORT, "nhis")
+            except Exception as e:
+                log(f"ERROR: 최초 준비 상태를 저장하지 못했습니다: {e}")
+                return False
+            emit_bootstrap_ready()
+            log("최초 보안/로그인 준비 완료. 다음 기관 준비를 진행합니다.")
+            return True
+        if main_ready:
             log("  메인 페이지 준비 완료")
         else:
             log("  WARN: 수임사업장선택 버튼 대기 시간 초과 — 계속 진행")
@@ -532,6 +554,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="국민건강보험 EDI 자동화")
     parser.add_argument("--auto", action="store_true",
                         help="비대화형 일괄 모드 (GUI 병렬 subprocess 용)")
+    parser.add_argument("--bootstrap-only", action="store_true",
+                        help="최초 보안/로그인 준비만 수행하고 업무 배치는 시작하지 않음")
     parser.add_argument("--year", type=int, default=None)
     parser.add_argument("--month", type=int, default=None)
     parser.add_argument("--firms", type=str, default=None,
@@ -541,13 +565,17 @@ if __name__ == "__main__":
     parser.add_argument("--save-site", type=str, default=None,
                         help="저장 최상위 폴더명 오버라이드 (병렬: NPS와 공통 폴더)")
     args = parser.parse_args()
+    exit_code = 0
     try:
-        asyncio.run(main(args))
+        if asyncio.run(main(args)) is False:
+            exit_code = 1
     except Exception as e:
         print(f"\nFATAL ERROR: {e}")
         import traceback
         traceback.print_exc()
+        exit_code = 1
     finally:
-        if not args.auto:
+        if not args.auto and not args.bootstrap_only:
             print("\n프로그램을 종료하려면 Enter를 누르세요...")
             input()
+    raise SystemExit(exit_code)

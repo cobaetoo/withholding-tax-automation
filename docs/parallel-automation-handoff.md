@@ -1,14 +1,16 @@
-# 병렬 자동화 핸드오프 — NPS EDI + NHIS EDI 동시 실행 feasibility
+# 병렬 자동화 핸드오프 — NPS·NHIS·COMWEL 3-way EDI
 
-> **목적:** 이 문서는 NPS(국민연금) EDI 자동화와 NHIS(건강보험) EDI 자동화를 **동시에 병렬**로 실행할 수 있는지의 feasibility를 **다른 세션에서 그대로 이어** 검토·구현할 수 있도록 정리한다. 구현을 시작하려면 먼저 이 문서 전체를 읽을 것.
+> **목적:** 병렬 EDI의 feasibility 조사·구현 이력·후속 검증 항목을 한곳에 유지한다. 초기 NPS·NHIS feasibility 기록과 이후 COMWEL을 포함한 3-way 구현을 함께 다룬다.
 >
 > **작성 시점:** 2026-06-23. feasibility 평가 완료(코드 구현 전). 서브에이전트 3개(브라우저/CDP·페이지 선택 / 스레드·async·GUI / 데이터·다운로드·세션) 병렬 조사 기반.
 >
-> **상태:** ⏳ feasibility 완료 · 구현 미착수 · 사용자 결정 대기.
+> **현재 상태(2026-08-06):** 3-way child CLI 병렬 실행 구현 완료. 신규 프로필은 순차 bootstrap 후 실제 업무만 병렬 실행하며, 자동 회귀와 보호 빌드를 통과했다. 실제 새 설치 환경의 보안모듈 스모크는 아직 대기다(§17).
+>
+> **역사적 범위:** §0~§8은 2026-06-23의 구현 전 feasibility 기록이다. 현재 동작과 인수인계는 **§17** 및 [최초 실행 조사 기록](parallel-first-run-investigation.md)을 우선한다.
 
 ---
 
-## 0. 한눈에 보기
+## 0. 한눈에 보기 (2026-06 feasibility 기록)
 
 | 접근 | 병렬 가능성 | 노력 | 비고 |
 |---|---|---|---|
@@ -20,7 +22,7 @@
 
 ---
 
-## 1. 핵심 결정 (사용자 확정 대기)
+## 1. 초기 핵심 결정 (2026-06 기록)
 
 | 항목 | 상태 |
 |---|---|
@@ -32,7 +34,7 @@
 
 ---
 
-## 2. 배경 — 현재 실행 구조
+## 2. 배경 — 당시 실행 구조
 
 - NPS·NHIS EDI 자동화는 **GUI 메뉴 / CLI 각각 별도**로 실행되어 직렬 동작.
 - GUI: `src/ui/main_window.py:35` 가 단일 `self.runner = AutomationRunner(self)` 보유 — 한 번에 한 자동화만.
@@ -531,3 +533,36 @@ NPS/NHIS CLI 진입점이 module-level `sys.stdout.detach()` 재래핑을 해 im
 
 ### 16.4 ★교훈
 §14.1 과 동일 맥락 — **저장경로 구조(producer) 변경 시 원천데이터 소비측(`_locate_raw_data`) 동기화 필수**. `make_save_dir` 기반이라 site/subdir 인자만 바꾸면 경로가 갈리는데, consumer가 site 리터럴을 하드코딩하면 회귀. 단독·병렬 양쪽을 모두 리졸브하는 헬퍼 + 진단 로깅가 회귀 방어 핵심.
+
+## 17. 신규 병렬 프로필 최초 실행 안정화 (2026-08-06)
+
+### 17.1 증상과 원인
+
+새 빌드의 첫 병렬 실행에서 세 영속 CDP 프로필(9223/9224/9225)이 동시에 초기화됐다.
+CDP 포트가 열린 시점만 성공으로 판단해, 포털 보안모듈·공동인증서 화면이 아직 준비되지
+않은 상태에서 다음 단계가 진행됐다. 또한 공용 연결기의 `pages[0]` 폴백이 보안/확장
+팝업을 작업 탭으로 고를 수 있었고, 그 창을 사용자가 닫으면 이전에는 최대 15분 동안
+죽은 page를 폴링했다.
+
+### 17.2 구현
+
+- `ParallelCliRunner`가 준비 마커 없는 프로필만 **NPS → NHIS → COMWEL** 순서로
+  `--bootstrap-only` child를 실행한다. child 종료 코드 0·stdout 준비 마커·포트/포털이
+  일치하는 준비 파일을 모두 확인해야 다음 기관과 실제 3-way 업무를 시작한다.
+- NPS/NHIS/COMWEL은 포털 도메인 탭을 우선 선택하며, 없으면 보안 팝업 대신 새 일반
+  탭을 사용한다. bootstrap이 준비한 NPS/COMWEL 탭은 정상 업무 시작 시 재로딩하지
+  않는다.
+- 브라우저/CDP 단절은 즉시 실패로 바꾸고, frozen child CLI도 `False`/예외를 종료 코드
+  1로 전달한다. 중단·spawn 예외 경로에서는 child와 reader를 정리한다.
+- 프로필 잠금 파일을 강제 삭제하지 않으며, GUI 종료 시 병렬 child/해당 Chrome도 중단한다.
+
+### 17.3 검증과 남은 게이트
+
+- 자동 회귀: `tests/test_parallel_bootstrap.py`, `tests/test_edi_portal_pages.py`,
+  `tests/test_gui_cli_dispatch.py`가 준비 순서·fresh 프로필·중단·팝업 탭·CDP 단절·frozen
+  종료 코드를 고정한다.
+- 보호 빌드(`python build.py`)의 Cython 스테이징·번들 검증·Inno Setup 설치 파일 생성이
+  통과했다.
+- 실제 새 Windows 사용자 또는 VM에서 단일 수임처로 첫 병렬 실행을 확인해야 한다.
+  세 기관의 준비가 순차로 끝난 뒤에만 실제 수임처 업무가 동시에 시작되어야 한다.
+  상세 증상·검증 기록은 [최초 실행 조사 기록](parallel-first-run-investigation.md)을 참조.

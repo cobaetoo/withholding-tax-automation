@@ -13,6 +13,14 @@ from src.utils.log import log
 
 # ParallelCliRunner._RESULT_MARKER 와 동일해야 함.
 RESULT_MARKER = "__WTAX_RESULT__"
+# 최초 병렬 프로필 준비 CLI가 로그인·포털 화면 준비까지 통과했을 때만 출력한다.
+# 일반 배치 결과 마커와 분리해, 부모가 다음 포털 bootstrap을 안전하게 시작할 수 있다.
+BOOTSTRAP_READY_MARKER = "__WTAX_BOOTSTRAP_READY__"
+
+
+def emit_bootstrap_ready():
+    """최초 프로필의 보안/로그인 준비 완료를 부모 워커에 알린다."""
+    print(BOOTSTRAP_READY_MARKER, flush=True)
 
 
 def emit_summary(total, completed, skipped):

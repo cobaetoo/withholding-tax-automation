@@ -79,7 +79,13 @@ nexacro_click_button = nexacro_click_button_viewport
 # ─── 연결/로그인 ────────────────────────────────────────────────────────────
 
 async def connect_page(playwright, *, url: str = CDP_URL):
-    """CDP로 Chrome에 연결하고 NPS EDI 탭 우선 반환 (url 미지정 시 기본 포트)"""
+    """CDP로 연결해 NPS EDI의 정상 탭만 반환한다.
+
+    Chrome CDP는 포털 첫 화면보다 보안모듈/확장 팝업을 먼저 노출할 수 있다.
+    그 팝업을 ``pages[0]``로 잡아 ``goto``하면 주소창 없는 보안 창을 작업 탭으로
+    바꾸는 문제가 생긴다. 목표 탭의 URL 커밋을 잠시 기다리고, 없으면 새 일반 탭을
+    만들어 호출부가 NPS URL로 이동하게 한다.
+    """
     from src.utils.stealth import stealth_all_pages, register_auto_stealth
 
     browser = await playwright.chromium.connect_over_cdp(url)
@@ -88,22 +94,30 @@ async def connect_page(playwright, *, url: str = CDP_URL):
     await stealth_all_pages(context)
     register_auto_stealth(context)
 
-    for pg in context.pages:
-        try:
-            if "edi.nps.or.kr" in pg.url:
-                return browser, context, pg
-        except Exception:
-            continue
+    for _ in range(12):  # Chrome 시작 URL이 실제 탭 URL로 커밋될 시간(최대 3초)
+        for pg in context.pages:
+            try:
+                if "edi.nps.or.kr" in pg.url:
+                    return browser, context, pg
+            except Exception:
+                continue
+        await asyncio.sleep(0.25)
 
-    page = context.pages[0] if context.pages else await context.new_page()
-    return browser, context, page
+    return browser, context, await context.new_page()
 
 
 async def wait_for_login(page):
     """NPS EDI 로그인 완료 대기 (수동 로그인)"""
-    if "nexacro" in page.url:
-        log("이미 로그인되어 있습니다.")
-        return True
+    try:
+        if page.is_closed():
+            log("ERROR: 국민연금 EDI 브라우저 창이 닫혔습니다. 다시 실행해 주세요.")
+            return False
+        if "nexacro" in page.url:
+            log("이미 로그인되어 있습니다.")
+            return True
+    except Exception as e:
+        log(f"ERROR: 국민연금 EDI 브라우저 연결을 확인할 수 없습니다: {e}")
+        return False
 
     log("\n브라우저에서 국민연금 EDI 로그인을 진행해 주세요.")
     log("공동인증서로 로그인 후 자동으로 감지됩니다.")
@@ -111,11 +125,15 @@ async def wait_for_login(page):
     for i in range(LOGIN_TIMEOUT_S // 5):
         await asyncio.sleep(5)
         try:
+            if page.is_closed():
+                log("ERROR: 국민연금 EDI 브라우저 창이 닫혔습니다. 다시 실행해 주세요.")
+                return False
             if "nexacro" in page.url:
                 log("로그인 확인됨.")
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            log(f"ERROR: 국민연금 EDI 브라우저 연결이 끊겼습니다: {e}")
+            return False
         if i % 6 == 5:
             log(f"  로그인 대기 중... ({(i + 1) * 5}초)")
 

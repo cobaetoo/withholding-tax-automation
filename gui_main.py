@@ -127,7 +127,8 @@ def _dispatch_cli_subprocess() -> bool:
             pass
 
     if not module:
-        return False
+        print("[wtax-cli] 실행할 모듈이 없습니다.", file=sys.stderr)
+        raise SystemExit(2)
 
     import argparse
     import asyncio
@@ -135,6 +136,8 @@ def _dispatch_cli_subprocess() -> bool:
 
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--auto", action="store_true")
+    parser.add_argument("--bootstrap-only", action="store_true",
+                        help="최초 보안/로그인 준비만 수행")
     parser.add_argument("--year", type=int, default=None)
     parser.add_argument("--month", type=int, default=None)
     parser.add_argument("--firms", type=str, default=None)
@@ -146,9 +149,13 @@ def _dispatch_cli_subprocess() -> bool:
 
     try:
         mod = importlib.import_module(module)
-        asyncio.run(mod.main(args))
+        result = asyncio.run(mod.main(args))
     except Exception as e:
         print(f"[wtax-cli] FATAL: {e}", file=sys.stderr)
+        raise SystemExit(1)
+    if result is False:
+        print("[wtax-cli] 작업이 완료되지 않았습니다.", file=sys.stderr)
+        raise SystemExit(1)
     return True
 
 

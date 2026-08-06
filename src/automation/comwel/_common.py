@@ -64,7 +64,11 @@ from src.automation.comwel._download import (
 # ─── 연결/로그인 ────────────────────────────────────────────────────────────
 
 async def connect_page(playwright, *, url: str = CDP_URL):
-    """CDP로 Chrome에 연결하고 근로복지공단 EDI 탭 우선 반환."""
+    """CDP로 연결해 근로복지공단 EDI의 정상 탭만 반환한다.
+
+    보안모듈이 먼저 연 팝업을 ``pages[0]``로 사용하면 주소창 없는 창에 포털을
+    강제로 이동시키게 된다. 목표 탭 URL을 기다리고, 없으면 새 일반 탭을 사용한다.
+    """
     from src.utils.stealth import stealth_all_pages, register_auto_stealth
 
     browser = await playwright.chromium.connect_over_cdp(url)
@@ -73,19 +77,21 @@ async def connect_page(playwright, *, url: str = CDP_URL):
     await stealth_all_pages(context)
     register_auto_stealth(context)
 
-    for pg in context.pages:
-        try:
-            if "total.comwel.or.kr" in pg.url:
-                # viewport 1920x1080 설정 — 반응형 헤더에서 GNB 메뉴 숨김 방지 (라이브 검증)
-                try:
-                    await pg.set_viewport_size({"width": 1920, "height": 1080})
-                except Exception:
-                    pass
-                return browser, context, pg
-        except Exception:
-            continue
+    for _ in range(12):
+        for pg in context.pages:
+            try:
+                if "total.comwel.or.kr" in pg.url:
+                    # viewport 1920x1080 설정 — 반응형 헤더에서 GNB 메뉴 숨김 방지 (라이브 검증)
+                    try:
+                        await pg.set_viewport_size({"width": 1920, "height": 1080})
+                    except Exception:
+                        pass
+                    return browser, context, pg
+            except Exception:
+                continue
+        await asyncio.sleep(0.25)
 
-    page = context.pages[0] if context.pages else await context.new_page()
+    page = await context.new_page()
     try:
         await page.set_viewport_size({"width": 1920, "height": 1080})
     except Exception:
@@ -103,19 +109,25 @@ async def wait_for_login(page):
     기존 btnLogin/guestView 는 로그인 페이지(#/)에서 존재조차 안 해 신뢰 불가.)
     """
     async def _logged_in(p) -> bool:
-        try:
-            return await p.evaluate(r"""(id) => {
-                const el = document.getElementById(id);
-                if (!el) return false;
-                const r = el.getBoundingClientRect();
-                return r.width > 0 && r.height > 0;
-            }""", LOGOUT_BTN_ID)
-        except Exception:
-            return False  # evaluate 실패 시 로그인 안 된 것으로 대기 유지
+        # CDP/page 단절은 호출부에서 즉시 실패로 전환해야 한다. 여기서 예외를
+        # False로 삼키면 로그인 미완료와 구분되지 않아 15분 polling이 이어진다.
+        return await p.evaluate(r"""(id) => {
+            const el = document.getElementById(id);
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        }""", LOGOUT_BTN_ID)
 
-    if await _logged_in(page):
-        log("이미 로그인되어 있습니다.")
-        return True
+    try:
+        if page.is_closed():
+            log("ERROR: 근로복지공단 EDI 브라우저 창이 닫혔습니다. 다시 실행해 주세요.")
+            return False
+        if await _logged_in(page):
+            log("이미 로그인되어 있습니다.")
+            return True
+    except Exception as e:
+        log(f"ERROR: 근로복지공단 EDI 브라우저 연결을 확인할 수 없습니다: {e}")
+        return False
 
     log("\n브라우저에서 근로복지공단(고용보험) EDI 로그인을 진행해 주세요.")
     log("사무대행(151-86-01316) 공동인증서로 로그인 후 자동으로 감지됩니다.")
@@ -123,11 +135,15 @@ async def wait_for_login(page):
     for i in range(LOGIN_TIMEOUT_S // 5):
         await asyncio.sleep(5)
         try:
+            if page.is_closed():
+                log("ERROR: 근로복지공단 EDI 브라우저 창이 닫혔습니다. 다시 실행해 주세요.")
+                return False
             if await _logged_in(page):
                 log("로그인 확인됨.")
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            log(f"ERROR: 근로복지공단 EDI 브라우저 연결이 끊겼습니다: {e}")
+            return False
         if i % 6 == 5:
             log(f"  로그인 대기 중... ({(i + 1) * 5}초)")
 
@@ -155,16 +171,29 @@ async def close_samu_popup(page):
     return closed
 
 
-async def wait_for_workplace_ready(page, max_wait: int = POPUP_TIMEOUT_S):
-    """페이지 로딩 완료 대기 (간단 버전)."""
+async def wait_for_edi_ready(page, max_wait: int = POPUP_TIMEOUT_S):
+    """로그인 후 대시보드 또는 20209 업무 화면이 실제 조작 가능한지 확인한다."""
     for _ in range(max_wait):
         try:
-            ready = await page.evaluate("""() => document.readyState === 'complete'""")
+            if page.is_closed():
+                log("ERROR: 근로복지공단 EDI 브라우저 창이 닫혔습니다.")
+                return False
+            ready = await page.evaluate(r"""(ids) => {
+                if (document.readyState !== 'complete') return false;
+                return ids.some((id) => {
+                    const el = document.getElementById(id);
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    return rect.width > 0 && rect.height > 0;
+                });
+            }""", [QUICKMENU_20209_ID, MENU_INFO_INQUIRY_ID, INPUT_MGMT_NO_ID])
             if ready:
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            log(f"ERROR: 근로복지공단 EDI 준비 상태를 확인할 수 없습니다: {e}")
+            return False
         await asyncio.sleep(1)
+    log("ERROR: 근로복지공단 EDI 대시보드/20209 화면 준비 시간이 초과되었습니다.")
     return False
 
 

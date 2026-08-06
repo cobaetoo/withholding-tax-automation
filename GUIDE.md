@@ -478,7 +478,11 @@ AutomationRunner (AsyncWorker)
 | 12 | 홈택스 | https://www.hometax.go.kr/ |
 | 13 | 위택스 | https://www.wetax.go.kr/ (메인: `/main.do`) |
 
-모든 포털에서 CDP 포트 9223을 사용한다. Chrome은 `subprocess.Popen`으로 실행하며, Playwright는 `connect_over_cdp`로 연결한다.
+직렬 포털 전환은 CDP 포트 9223 Chrome을 재사용한다. **병렬 EDI 실행**은 예외로
+국민연금 9223·건강보험 9224·고용보험 9225의 전용 Chrome 프로필을 사용한다. 신규
+프로필은 기관별 로그인·보안 준비를 순차로 끝낸 뒤, 실제 수임처 업무만 세 기관이
+동시에 처리한다. Chrome은 `subprocess.Popen`으로 실행하며, Playwright는
+`connect_over_cdp`로 연결한다.
 
 ## 8. 데이터베이스 스키마
 
@@ -550,7 +554,7 @@ python main.py
 |------|------|
 | `WTAX_SLOW_NETWORK=1` | **백업용**(CLI/headless 전용). GUI 없이 실행 시에만 사용 — 본래는 위 '설정 → 느린 네트워크 모드' 체크박스로 제어. 앱 실행 시 GUI 저장값이 이 env 초기값을 override. |
 | `WTAX_NO_DELAY=1` | 디버그 전용 — `human_delay`/`human_break`(anti-detect 인위 지연)만 0화. **라이브 배치 금지**. 폴링 interval/타임아웃/WEHAGO 고정 대기엔 무영향. |
-| `WTAX_CDP_PORT` | Chrome CDP 포트 (기본 9223). 병렬 EDI 런처가 9224/9225 사용. |
+| `WTAX_CDP_PORT` | Chrome CDP 포트 (기본 9223). 병렬 EDI child는 국민연금 9223·건강보험 9224·고용보험 9225를 각각 사용. |
 | `WTAX_DEBUG_SWTA` | SWTA 신고주기 라디오 DOM 진단 덤프(`swta_radio_debug.txt`). |
 
 ### UI 테마 (다크 모드 대응)
@@ -563,7 +567,7 @@ python main.py
 python build.py
 # 산출물:
 #   dist/원천징수자동화/             (PyInstaller onedir: 원천징수자동화.exe + _internal/)
-#   installer_output/원천징수자동화_설치.exe  (Inno Setup 인스톨러, ~233MB)
+#   installer_output/원천징수자동화_설치.exe  (Inno Setup 인스톨러, 크기는 빌드 구성에 따라 달라짐)
 ```
 
 빌드 설정 (`build.py`):
@@ -573,7 +577,7 @@ python build.py
 - `--add-data`: Playwright node 드라이버(`playwright/driver/node.exe`), `style.qss`
 - **`verify_bundle()`**: 빌드 후 PYZ(순수-Python) + `_internal`(네이티브) 핵심 의존 실제 포함 여부 검증 (릴리스 전 필수)
 
-> **Playwright 브라우저 바이너리는 배포에 필요 없음**: production 코드는 `chromium.launch()` 대신 **`connect_over_cdp`** 로 사용자의 실제 Chrome(포트 9223)에 연결합니다. 따라서 `playwright install chromium`의 결과물(수백 MB)을 번들에 포함하지 않습니다. `playwright install`은 개발용 드라이버 확보 목적으로만 사용합니다.
+> **Playwright 브라우저 바이너리는 배포에 필요 없음**: production 코드는 `chromium.launch()` 대신 **`connect_over_cdp`** 로 사용자의 실제 Chrome(직렬 9223, 병렬 EDI 9223/9224/9225)에 연결합니다. 따라서 `playwright install chromium`의 결과물(수백 MB)을 번들에 포함하지 않습니다. `playwright install`은 개발용 드라이버 확보 목적으로만 사용합니다.
 
 실행 전제 조건(배포 exe):
 - Chrome이 시스템에 설치되어 있어야 함 (인스톨러가 검사)
@@ -600,7 +604,7 @@ python build.py
 | Phase 1을 BatchEngine에서 분리 | 수임처 리스트는 배치 작업이 아닌 마스터 데이터. DB 영속화 필요. |
 | WEHAGO SPA에 `domcontentloaded` 사용 | `networkidle` 대기 시 WEHAGO가 항상 네트워크 연결을 유지하여 30초 타임아웃 발생. |
 | Nexacro에 dispatchEvent 사용 | 일반 DOM click을 Nexacro가 무시함. mousedown→mouseup→click 순차 이벤트 필요. |
-| CDP 포트 9223 통일 | 포트별 Chrome 인스턴스 관리 복잡도 감소. 포털 전환 시 kill 후 재시작. |
+| 직렬 9223·병렬 EDI 포트/프로필 분리 | 직렬 경로는 9223 재사용을 보존하고, 병렬 EDI는 9223/9224/9225로 보안모듈·탭·다운로드를 격리. |
 | 수동 로그인 방식 | 공동인증서/보안모듈 자동화의 법적/기술적 리스크 회피. |
 | QThread + asyncio 분리 | Playwright(asyncio)와 Qt 이벤트루프를 직접 섞을 수 없음. |
 | 사업장관리번호로 수임처 검색 | 동명 수임처 구분 및 정확한 매칭. 사업자등록번호에서 `-` 제거 후 `0` 추가. |

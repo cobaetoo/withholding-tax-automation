@@ -676,8 +676,8 @@ class MainWindow(QMainWindow):
             self.company_table.set_running(True)
             self.parallel_runner.start(nps_port=9223, nhis_port=9224, comwel_port=9225,
                                        firms=firms, mgmts=mgmts, year=year, month=month)
-            self._on_log(f"[병렬] 전체 수임처 {len(firms)}건 병렬 실행 (NPS 9223 / NHIS 9224 / 고용보험 9225)")
-            self._on_log("[병렬] 세 Chrome이 열리면 각각 공동인증서로 로그인하세요 (첫 1회, 이후 세션 재사용)")
+            self._on_log(f"[병렬] 전체 수임처 {len(firms)}건 실행 요청 (NPS 9223 / NHIS 9224 / 고용보험 9225)")
+            self._on_log("[병렬] 새 보안 프로필은 기관별로 순차 준비 후, 수임처 처리는 세 기관이 병렬로 진행됩니다.")
             return
 
         # 비밀번호 필요 phase: 툴바 비밀번호 필드에서 읽기 (미입력 시 강력 알림 후 차단)
@@ -736,6 +736,11 @@ class MainWindow(QMainWindow):
             self._download_worker.cancel()
         self._cleanup_worker("_download_worker")
         self._cleanup_worker("_update_worker")
+        # 최초 보안환경 준비 중인 병렬 child/Chrome도 종료해야 다음 실행이 기존
+        # profile lock·stale CDP 포트에 붙지 않는다.
+        if self.parallel_runner.is_running():
+            self.parallel_runner.stop()
+            self.parallel_runner.wait(5000)
         self.runner.request_stop()
         self.runner.wait(3000)
         event.accept()

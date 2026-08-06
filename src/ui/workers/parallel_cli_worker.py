@@ -9,15 +9,18 @@ import os
 import sys
 import subprocess
 import threading
+import time
 
 from PySide6.QtCore import QThread, Signal
 
+from src.automation._parallel_report import BOOTSTRAP_READY_MARKER, RESULT_MARKER
 from src.utils.save_path import PARALLEL_SAVE_SITE
 
 # CLI(_emit_summary)가 stdout 으로 찍는 구조화 결과 마커. 이 라인은 log_message 가
 # 아니라 result_summary 로 변환되어 로그 패널에 raw JSON 이 노출되지 않는다.
-# src/automation/nps/nps_auto_cdp.py / nhis/nhis_edi_auto_cdp.py 의 _RESULT_MARKER 와 동일.
-_RESULT_MARKER = "__WTAX_RESULT__"
+# 세 EDI CLI(NPS/NHIS/COMWEL)의 _RESULT_MARKER와 동일.
+_RESULT_MARKER = RESULT_MARKER
+_BOOTSTRAP_READY_MARKER = BOOTSTRAP_READY_MARKER
 
 # 병렬 실행 시 NHIS/NPS/고용보험이 같은 최상위 폴더에 저장하도록 두 CLI 에 전달할 저장 폴더명.
 # → ~/Desktop/공단EDI_{YYYYMM}/{수임처}/ 안에 건강보험+국민연금+고용보험 자료가 함께 들어감.
@@ -25,155 +28,331 @@ _RESULT_MARKER = "__WTAX_RESULT__"
 
 
 class ParallelCliRunner(QThread):
-    """NPS+NHIS+고용보험 CLI 를 병렬 subprocess 로 실행·모니터링."""
+    """최초 보안환경은 순차로, 실제 업무는 3-way 병렬로 실행한다.
 
-    log_message = Signal(str)            # "[NPS] ..." / "[NHIS] ..." / "[고용] ..." 라인
-    finished_one = Signal(str, bool)     # (which, success)
+    새 cdp 프로필에서는 Chrome CDP 포트가 열렸다고 해서 보안모듈/로그인까지
+    준비된 것이 아니다. 준비되지 않은 포털만 하나씩 bootstrap하고, 세 포털이
+    모두 준비된 뒤에 기존의 세 CLI 업무 배치를 동시에 시작한다.
+    """
+
+    log_message = Signal(str)
+    finished_one = Signal(str, bool)
     all_finished = Signal()
-    result_summary = Signal(str, str)    # (which, json) — _emit_summary 마커 파싱 결과
+    result_summary = Signal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._procs = {}                 # "nps"/"nhis"/"comwel" -> Popen
-        self._readers = {}               # "nps"/"nhis"/"comwel" -> Thread
+        self._procs = {}
+        self._readers = {}
         self._nps_port = 9223
         self._nhis_port = 9224
         self._comwel_port = 9225
+        self._request = {}
+        self._active = False
+        self._stop_requested = threading.Event()
+        self._state_lock = threading.RLock()
+        self._bootstrap_ready = set()
 
     def start(self, *, nps_port=9223, nhis_port=9224, comwel_port=9225,
               firms=None, mgmts=None, year=None, month=None):
-        """세 CLI 백그라운드 시작. firms=None → 전체 수임처(--auto 만).
-
-        mgmts: firms 와 같은 순서의 사업장관리번호 리스트. 제공되면 CLI 가
-        이름 대신 관리번호로 수임처를 선택(원래 동작). 비었으면 이름 fallback.
-        """
+        """요청만 저장하고 QThread에서 준비→병렬 실행을 시작한다."""
+        if self.is_running():
+            raise RuntimeError("병렬 자동화가 이미 실행 중입니다.")
         self._nps_port = nps_port
         self._nhis_port = nhis_port
         self._comwel_port = comwel_port
-        # 본 파일(src/ui/workers/) 기준 3단계 위 = repo root (src 패키지 부모).
-        # 주의: 2단계는 src/ 까지라 python -m src... 가 src 를 못 찾음(ModuleNotFoundError).
+        self._request = {
+            "firms": list(firms) if firms else None,
+            "mgmts": list(mgmts) if mgmts else None,
+            "year": year,
+            "month": month,
+        }
+        with self._state_lock:
+            self._procs.clear()
+            self._readers.clear()
+            self._bootstrap_ready.clear()
+            self._stop_requested.clear()
+            self._active = True
+        super().start()
+
+    def _make_specs(self):
+        """포털별 child 실행 정보. 이 순서가 최초 bootstrap 순서다."""
         repo_root = os.path.abspath(
             os.path.join(os.path.dirname(__file__), "..", "..", "..")
         )
-        # src 패키지 해석 이중 보장: cwd(repo root) + PYTHONPATH(안전망)
         pypath = repo_root + os.pathsep + os.environ.get("PYTHONPATH", "")
-        # PYTHONUTF8 은 dev(python)에서만 유효(frozen exe 는 무시) — 그래서 frozen 은
-        # gui_main._dispatch_cli_subprocess 가 stdout 을 직접 utf-8 로 재설정한다.
-        # PYTHONIOENCODING/PYTHONUNBUFFERED 는 dev 경로 보강(즉시 flush·utf-8 파이프).
-        _enc_env = {"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
-                    "PYTHONUNBUFFERED": "1", "PYTHONPATH": pypath}
-        env_nps = {**os.environ, "WTAX_CDP_PORT": str(nps_port), **_enc_env}
-        env_nhis = {**os.environ, "WTAX_CDP_PORT": str(nhis_port), **_enc_env}
-        env_comwel = {**os.environ, "WTAX_CDP_PORT": str(comwel_port), **_enc_env}
-        self._spawn("nps", "src.automation.nps.nps_auto_cdp", env_nps,
-                    repo_root, firms, mgmts, year, month)
-        self._spawn("nhis", "src.automation.nhis.nhis_edi_auto_cdp", env_nhis,
-                    repo_root, firms, mgmts, year, month)
-        self._spawn("comwel", "src.automation.comwel.comwel_auto_cdp", env_comwel,
-                    repo_root, firms, mgmts, year, month)
-        super().start()  # QThread.run — 완료 대기
+        enc_env = {
+            "PYTHONUTF8": "1",
+            "PYTHONIOENCODING": "utf-8",
+            "PYTHONUNBUFFERED": "1",
+            "PYTHONPATH": pypath,
+        }
+        entries = (
+            ("nps", "국민연금(NPS)", "nps", self._nps_port,
+             "src.automation.nps.nps_auto_cdp"),
+            ("nhis", "건강보험(NHIS)", "nhis", self._nhis_port,
+             "src.automation.nhis.nhis_edi_auto_cdp"),
+            ("comwel", "고용보험(COMWEL)", "comwel", self._comwel_port,
+             "src.automation.comwel.comwel_auto_cdp"),
+        )
+        return [
+            {
+                "which": which,
+                "label": label,
+                "portal": portal,
+                "port": port,
+                "module": module,
+                "env": {**os.environ, "WTAX_CDP_PORT": str(port), **enc_env},
+                "cwd": repo_root,
+            }
+            for which, label, portal, port, module in entries
+        ]
 
-    def _spawn(self, which, module, env, cwd, firms, mgmts, year, month):
-        # frozen(PyInstaller exe)에서는 python -m 이 불가 → 진입점(gui_main)의
-        # --wtax-cli 디스패치로 CLI 모듈 실행. dev(python)은 기존 -m 방식 유지.
+    def _spawn(self, spec, *, bootstrap_only=False, clear_fresh_profile=False):
+        """한 CLI와 정확히 그 CLI를 읽는 reader thread를 시작한다."""
+        module = spec["module"]
         if getattr(sys, "frozen", False):
-            args = [sys.executable, "--wtax-cli", module, "--auto"]
+            args = [sys.executable, "--wtax-cli", module]
         else:
-            args = [sys.executable, "-u", "-m", module, "--auto"]
-        if year is not None:
-            args += ["--year", str(year)]
-        if month is not None:
-            args += ["--month", str(month)]
-        if firms:
-            args += ["--firms", ",".join(firms)]
-        if mgmts:
-            args += ["--mgmts", ",".join(str(m) for m in mgmts)]
-        # 병렬: 두 CLI 를 같은 최상위 폴더로 묶어 수임처별로 건강보험+국민연금 자료를 함께 저장.
-        args += ["--save-site", PARALLEL_SAVE_SITE]
+            args = [sys.executable, "-u", "-m", module]
+        if bootstrap_only:
+            args += ["--bootstrap-only"]
+        else:
+            args += ["--auto"]
+            if self._request.get("year") is not None:
+                args += ["--year", str(self._request["year"])]
+            if self._request.get("month") is not None:
+                args += ["--month", str(self._request["month"])]
+            if self._request.get("firms"):
+                args += ["--firms", ",".join(self._request["firms"])]
+            if self._request.get("mgmts"):
+                args += ["--mgmts", ",".join(str(m) for m in self._request["mgmts"])]
+            args += ["--save-site", PARALLEL_SAVE_SITE]
+
+        env = dict(spec["env"])
+        # fresh profile은 bootstrap 때만 적용한다. 직후 normal child까지 상속되면
+        # 방금 준비한 프로필과 ready 마커를 다시 지워 버린다.
+        if clear_fresh_profile:
+            env.pop("WTAX_FRESH_PROFILE", None)
         kwargs = dict(
-            args=args, env=env, cwd=cwd,
+            args=args, env=env, cwd=spec["cwd"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
-            # errors="replace": 자식이 예기치 못한 비-utf8 바이트를 흘려도 reader 가
-            # UnicodeDecodeError 로 죽지 않게(파이프 미배수→자식 교착 방지). 근본 원인은
-            # gui_main 의 utf-8 강제로 해소하되, reader 사망 자체를 구조적으로 차단하는 2중 방어.
-            errors="replace",
+            stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
         )
         if sys.platform == "win32":
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-        self._procs[which] = subprocess.Popen(**kwargs)
-        t = threading.Thread(target=self._pump, args=(which,), daemon=True)
-        t.start()
-        self._readers[which] = t
+        with self._state_lock:
+            # stop()이 Popen 직전에 들어온 경우 새 child를 만들지 않는다. Popen과
+            # 등록을 같은 lock으로 묶어 stop()의 종료 대상 snapshot에서 빠지는
+            # child/Chrome이 없게 한다.
+            if self._stop_requested.is_set():
+                return None
+            proc = subprocess.Popen(**kwargs)
+            self._procs[spec["which"]] = proc
+        reader = threading.Thread(
+            target=self._pump, args=(spec["which"], proc), daemon=True,
+        )
+        reader.start()
+        with self._state_lock:
+            self._readers[spec["which"]] = reader
+        return proc
 
-    def _pump(self, which):
+    def _pump(self, which, proc=None):
+        """stdout reader. proc를 캡처해 bootstrap/normal 키 재사용 레이스를 막는다."""
         prefix = {"nps": "[NPS]", "nhis": "[NHIS]", "comwel": "[고용]"}.get(
             which, f"[{which.upper()}]")
-        proc = self._procs.get(which)
+        if proc is None:  # 기존 테스트/호출부 호환
+            with self._state_lock:
+                proc = self._procs.get(which)
         if not proc or not proc.stdout:
             return
         try:
             for line in proc.stdout:
                 line = line.rstrip()
-                # 구조화 결과 마커 라인은 result_summary 로 분리(로그 패널엔 미출력).
+                if line == _BOOTSTRAP_READY_MARKER:
+                    with self._state_lock:
+                        self._bootstrap_ready.add(which)
+                    self.log_message.emit(f"{prefix} 최초 보안/로그인 준비 완료")
+                    continue
                 if line.startswith(_RESULT_MARKER):
                     self.result_summary.emit(which, line[len(_RESULT_MARKER):].strip())
                     continue
                 self.log_message.emit(f"{prefix} {line}")
         except Exception as e:
-            # reader 가 조용히 죽으면 파이프가 안 비워져 자식이 교착된다(원래 버그의 핵심).
-            # errors="replace" 로 디코드 에러는 안 나지만, 그래도 예외 시 삼키지 말고 노출.
             self.log_message.emit(f"{prefix} [reader 예외] {e!r}")
 
-    def run(self):
-        for which, proc in list(self._procs.items()):
-            proc.wait()
-            self.finished_one.emit(which, proc.returncode == 0)
-        # _pump 스레드가 마지막 마커(result_summary) emit 을 끝내고 종료한 뒤에
-        # all_finished 를 emit 하도록 join. 같은 GUI 이벤트 큐에 FIFO 로 적재되어
-        # result_summary 가 항상 all_finished 핸들러보다 먼저 처리된다(순서 보장).
-        for t in list(self._readers.values()):
-            t.join(timeout=5.0)
-        self.all_finished.emit()
+    def _wait_for_process(self, proc):
+        """정지 요청도 즉시 반영할 수 있도록 poll 기반으로 기다린다."""
+        if proc is None:
+            return None
+        while proc.poll() is None:
+            if self._stop_requested.wait(0.1):
+                return None
+        return proc.returncode
 
-    def stop(self):
-        """두 subprocess + 자식 Chrome 트리 종료.
-
-        강제 종료 전 짧은 grace 창을 둬서, 마무리 단계의 CLI가 스스로
-        browser.close()로 영속 프로필(보안 확장 포함)을 flush 할 기회를 준다.
-        단 Windows의 proc.terminate()/taskkill /F 는 비동기 강제종료라 완전한
-        graceful 은 보장 못 함 — 신뢰 가능한 flush 는 자연완료 경로가 담당한다.
-        """
-        for which, proc in list(self._procs.items()):
-            # grace 창: 자연 종료 중이면 스스로 flush 하고 끝나도록 잠시 대기.
-            # _pump reader 스레드가 stdout 파이프를 계속 drain 하므로 wait 가
-            # pipe-buffer 가득 참으로 교착되지 않는다(TimeoutExpired → except).
+    def _join_reader(self, which, proc, *, timeout=5.0):
+        with self._state_lock:
+            reader = self._readers.get(which)
+        if reader is not None:
             try:
-                proc.wait(timeout=2.0)
-            except Exception:
+                reader.join(timeout=timeout)
+            except RuntimeError:
+                # Thread.start() 직후의 예외 경로에서는 아직 시작되지 않은 reader가
+                # 남을 수 있다. child 정리는 계속 진행한다.
                 pass
+        with self._state_lock:
+            if self._procs.get(which) is proc:
+                self._procs.pop(which, None)
+            if self._readers.get(which) is reader:
+                self._readers.pop(which, None)
+
+    @staticmethod
+    def _terminate_processes(procs):
+        """살아 있는 child CLI와 그 Chrome 트리를 best-effort로 종료한다."""
+        for proc in procs:
+            try:
+                if proc.poll() is not None:
+                    continue
+            except Exception:
+                continue
             try:
                 proc.terminate()
             except Exception:
                 pass
-            # CLI→Chrome 부모-자식 트리 종료 (kill_chrome port= GUI 한계 회피).
-            if sys.platform == "win32" and proc.poll() is None:
+            if sys.platform == "win32":
                 try:
-                    subprocess.run(
-                        ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    )
+                    if proc.poll() is None:
+                        subprocess.run(
+                            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=5,
+                        )
                 except Exception:
                     pass
-        # 재사용/분리(detached) Chrome 은 CLI 자식 트리에 없어 taskkill /T 가 못 죽임.
-        # CDP 포트를 LISTEN 중인 Chrome 브라우저 프로세스를 포트로 찾아 확실히 종료.
-        # 정지=완전 중단일 때만 kill — 자연 완료(_on_parallel_finished) 시엔 죽이지 않아
-        # 다음 실행이 세션을 재사용(재로그인 생략)할 수 있게 한다.
+
+    def _cleanup_child_processes(self):
+        """예외·중단 경로에서도 child/reader 추적 상태를 비운다."""
+        with self._state_lock:
+            children = list(self._procs.items())
+        self._terminate_processes(proc for _which, proc in children)
+
+        # GUI 종료 시 reader가 더 이상 Qt signal을 보내지 않도록 총 대기 시간을
+        # 제한한 채 drain한다. 정상 완료 시에는 이미 비어 있어 즉시 반환한다.
+        deadline = time.monotonic() + 5.0
+        for which, proc in children:
+            self._join_reader(
+                which,
+                proc,
+                timeout=max(0.0, deadline - time.monotonic()),
+            )
+
+    def _kill_port_chromes(self):
+        """child 트리 밖에 남은 포트별 Chrome을 종료한다."""
         from src.utils.chrome_cdp import kill_chrome_by_port
+
         kill_chrome_by_port(self._nps_port)
         kill_chrome_by_port(self._nhis_port)
         kill_chrome_by_port(self._comwel_port)
+
+    def _bootstrap_one(self, spec):
+        """한 포털의 신규 프로필을 로그인 가능한 상태까지 순차 준비한다."""
+        self.log_message.emit(
+            f"[병렬 준비] {spec['label']} 최초 보안환경을 준비합니다. "
+            "열린 브라우저에서 로그인해 주세요."
+        )
+        with self._state_lock:
+            self._bootstrap_ready.discard(spec["which"])
+        proc = self._spawn(spec, bootstrap_only=True)
+        if proc is None:
+            return False
+        returncode = self._wait_for_process(proc)
+        self._join_reader(spec["which"], proc)
+        if self._stop_requested.is_set():
+            return False
+
+        from src.utils.chrome_cdp import is_parallel_profile_ready
+        with self._state_lock:
+            marker_seen = spec["which"] in self._bootstrap_ready
+        profile_ready = is_parallel_profile_ready(
+            spec["port"], portal=spec["portal"], respect_fresh_profile=False,
+        )
+        if returncode == 0 and marker_seen and profile_ready:
+            self.log_message.emit(
+                f"[병렬 준비] {spec['label']} 준비 완료. 다음 기관을 준비합니다."
+            )
+            return True
+
+        self.log_message.emit(
+            f"[병렬 준비] {spec['label']} 준비 실패 "
+            f"(exit={returncode}, ready-marker={marker_seen}, profile={profile_ready}). "
+            "업무 병렬 실행은 시작하지 않았습니다."
+        )
+        return False
+
+    def run(self):
+        """준비되지 않은 포털은 직렬 bootstrap 후 실제 업무만 병렬 시작."""
+        normal = []
+        normal_completed = False
+        try:
+            specs = self._make_specs()
+            from src.utils.chrome_cdp import is_parallel_profile_ready
+            bootstrap_performed = False
+            for spec in specs:
+                if self._stop_requested.is_set():
+                    return
+                if is_parallel_profile_ready(spec["port"], portal=spec["portal"]):
+                    continue
+                bootstrap_performed = True
+                if not self._bootstrap_one(spec):
+                    return
+
+            if self._stop_requested.is_set():
+                return
+            self.log_message.emit("[병렬] 보안환경 준비 완료 — 세 기관 업무를 병렬 시작합니다.")
+            for spec in specs:
+                if self._stop_requested.is_set():
+                    return
+                proc = self._spawn(
+                    spec, clear_fresh_profile=bootstrap_performed,
+                )
+                if proc is None:
+                    return
+                normal.append((spec, proc))
+            for spec, proc in normal:
+                returncode = self._wait_for_process(proc)
+                if returncode is None:
+                    return
+                self.finished_one.emit(spec["which"], returncode == 0)
+            # 마지막 결과 마커까지 reader가 처리된 뒤 UI 완료를 알린다.
+            for spec, proc in normal:
+                self._join_reader(spec["which"], proc)
+            normal_completed = True
+        except Exception as e:
+            self.log_message.emit(f"[병렬] 실행 준비 중 예외: {e!r}")
+        finally:
+            self._cleanup_child_processes()
+            # 정상 완료 때는 다음 실행의 세션 재사용을 위해 Chrome을 남긴다. 반면
+            # normal child를 하나라도 띄운 뒤 중단·spawn 예외가 나면 detached Chrome이
+            # 남을 수 있으므로 포트 기준으로도 정리한다.
+            if normal and not normal_completed:
+                self._kill_port_chromes()
+            with self._state_lock:
+                self._active = False
+            self.all_finished.emit()
+
+    def stop(self):
+        """bootstrap 또는 업무 child와 포트별 Chrome을 모두 중단한다."""
+        self._stop_requested.set()
         self.requestInterruption()
+        with self._state_lock:
+            procs = list(self._procs.values())
+        self._terminate_processes(procs)
+        # 재사용/분리(detached) Chrome은 child 트리 밖일 수 있어 포트별로 종료한다.
+        self._kill_port_chromes()
 
     def is_running(self):
-        return any(p.poll() is None for p in self._procs.values())
+        with self._state_lock:
+            active = self._active
+            procs = list(self._procs.values())
+        return active or self.isRunning() or any(p.poll() is None for p in procs)

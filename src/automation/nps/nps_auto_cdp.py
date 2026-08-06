@@ -16,7 +16,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 from playwright.async_api import async_playwright
-from src.utils.chrome_cdp import launch_chrome, connect_page as cdp_connect
+from src.utils.chrome_cdp import CDP_PORT, launch_chrome, mark_parallel_profile_ready
 from src.utils.save_path import make_save_dir
 
 # 저장 최상위 폴더명(site_name). CLI --save-site 로 오버라이드 — 병렬 실행 시
@@ -62,7 +62,10 @@ def _trace(msg: str):
         pass
 
 
-from src.automation._parallel_report import emit_summary as _emit_summary
+from src.automation._parallel_report import (
+    emit_bootstrap_ready,
+    emit_summary as _emit_summary,
+)
 
 
 def print_header():
@@ -203,32 +206,51 @@ async def main(args=None):
     result = launch_chrome(url=NPS_URL)
     if not result["success"]:
         log(f"ERROR: {result['error']}")
-        return
+        return False
     if result.get("reused"):
         log("  기존 Chrome에 연결")
 
     async with async_playwright() as p:
         log("[2/3] Chrome 연결 + 로그인 대기...")
         try:
-            browser, context, page = await cdp_connect(p)
+            browser, context, page = await connect_page(p)
         except Exception as e:
             log(f"ERROR: Chrome 연결 실패 - {e}")
-            return
+            return False
 
-        # NPS EDI 페이지로 이동
-        await page.goto(NPS_URL, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
+        # bootstrap이 이미 준비한 NPS 탭은 재로딩하지 않는다. 보안모듈 팝업/세션을
+        # 다시 초기화할 수 있으므로 새 일반 탭일 때만 포털로 이동한다.
+        if "edi.nps.or.kr" not in page.url:
+            await page.goto(
+                NPS_URL,
+                wait_until="domcontentloaded",
+                timeout=PAGE_LOAD_TIMEOUT_MS,
+            )
         await page.bring_to_front()
 
         if not await wait_for_login(page):
             log("로그인 실패")
-            return
+            return False
 
         # Nexacro 프레임워크 준비 게이트 — wait_for_login 은 URL 에 'nexacro' 만 보고
         # True 를 반환해 타이밍이 약하다. 로그인 직후 첫 1~2 수임처가 반쯤 로딩된
         # 프레임워크에 no-op 클릭을 날려 누락되는 것(BUG1) 방지. NHIS wait_firm_selector_ready
         # 게이트(nhis_edi_auto_cdp.py)와 대칭.
         log("Nexacro 프레임워크 준비 대기...")
-        if not await wait_for_nexacro_ready(page):
+        nexacro_ready = await wait_for_nexacro_ready(page)
+        if getattr(args, "bootstrap_only", False):
+            if not nexacro_ready:
+                log("ERROR: 최초 준비 실패 — 국민연금 화면이 완전히 열리지 않았습니다.")
+                return False
+            try:
+                mark_parallel_profile_ready(CDP_PORT, "nps")
+            except Exception as e:
+                log(f"ERROR: 최초 준비 상태를 저장하지 못했습니다: {e}")
+                return False
+            emit_bootstrap_ready()
+            log("최초 보안/로그인 준비 완료. 다음 기관 준비를 진행합니다.")
+            return True
+        if not nexacro_ready:
             log("  WARN: Nexacro 준비 타임아웃 — 계속 진행")
 
         log("로그인 확인됨. 자동화 시작.\n")
@@ -625,6 +647,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="국민연금 EDI 자동화")
     parser.add_argument("--auto", action="store_true",
                         help="비대화형 일괄 모드 (GUI 병렬 subprocess 용)")
+    parser.add_argument("--bootstrap-only", action="store_true",
+                        help="최초 보안/로그인 준비만 수행하고 업무 배치는 시작하지 않음")
     parser.add_argument("--year", type=int, default=None)
     parser.add_argument("--month", type=int, default=None)
     parser.add_argument("--firms", type=str, default=None,
@@ -634,13 +658,17 @@ if __name__ == "__main__":
     parser.add_argument("--save-site", type=str, default=None,
                         help="저장 최상위 폴더명 오버라이드 (병렬: NHIS와 공통 폴더)")
     args = parser.parse_args()
+    exit_code = 0
     try:
-        asyncio.run(main(args))
+        if asyncio.run(main(args)) is False:
+            exit_code = 1
     except Exception as e:
         print(f"\nFATAL ERROR: {e}")
         import traceback
         traceback.print_exc()
+        exit_code = 1
     finally:
-        if not args.auto:
+        if not args.auto and not args.bootstrap_only:
             print("\n프로그램을 종료하려면 Enter를 누르세요...")
             input()
+    raise SystemExit(exit_code)

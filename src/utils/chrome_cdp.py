@@ -30,6 +30,12 @@ CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
 # _attempt_launch 가 Popen.pid 를 등록하고 kill_chrome(port=...)이 조회한다.
 _launched_pids: dict[int, int] = {}
 
+# 병렬 EDI 전용 프로필은 첫 로그인/보안모듈 준비가 끝난 뒤에만 일반 3-way
+# 배치에 투입한다. 이 마커는 해당 프로필 안에 두므로 프로필을 초기화하면 함께
+# 사라진다. (별도 전역 설정 파일에 두면 빈 프로필로 교체한 뒤에도 준비 완료로
+# 오인할 수 있다.)
+_PARALLEL_PROFILE_READY_FILE = ".wtax-portal-ready.json"
+
 
 def find_chrome():
     """Chrome 실행 파일 경로 자동 탐지"""
@@ -343,6 +349,64 @@ def _attempt_launch(chrome_path, junc, profile, url, *, port=CDP_PORT, kill_wait
     return {"success": False, "pid": pid}
 
 
+def _parallel_profile_dir(port: int) -> str:
+    """병렬 CDP 포트의 전용 user-data-dir 경로를 반환한다."""
+    return os.path.join(APP_DATA_DIR, "chrome-profiles", f"cdp-{int(port)}")
+
+
+def is_parallel_profile_ready(
+    port: int,
+    *,
+    portal: str | None = None,
+    respect_fresh_profile: bool = True,
+) -> bool:
+    """포트별 EDI 프로필의 최초 로그인/보안 준비 완료 여부.
+
+    단순히 디렉터리가 존재하는 것만으로는 부족하다. Chrome이 처음 한 번 열린 뒤
+    보안모듈 팝업에서 멈춘 경우에도 디렉터리는 만들어지므로, 포털 로그인과 화면
+    준비를 실제로 통과한 bootstrap CLI만 이 마커를 기록한다.
+    """
+    # WTAX_FRESH_PROFILE은 의도적으로 프로필을 초기화하는 진단 모드다. 이전
+    # 마커가 남아 있어도 bootstrap을 건너뛰면 안 된다. 단, 방금 bootstrap을
+    # 끝낸 워커는 자기가 기록한 마커를 확인해야 하므로 이 검사를 끌 수 있다.
+    if respect_fresh_profile and os.environ.get(
+        "WTAX_FRESH_PROFILE", "",
+    ).strip().lower() in (
+        "1", "true", "yes", "on",
+    ):
+        return False
+
+    path = os.path.join(_parallel_profile_dir(port), _PARALLEL_PROFILE_READY_FILE)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        saved_portal = payload.get("portal")
+        return (
+            payload.get("version") == 1
+            and isinstance(saved_portal, str)
+            and bool(saved_portal)
+            and (portal is None or saved_portal == portal)
+        )
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def mark_parallel_profile_ready(port: int, portal: str) -> None:
+    """포트별 전용 프로필이 로그인 가능한 상태임을 원자적으로 기록한다."""
+    profile_dir = _parallel_profile_dir(port)
+    os.makedirs(profile_dir, exist_ok=True)
+    path = os.path.join(profile_dir, _PARALLEL_PROFILE_READY_FILE)
+    temp_path = f"{path}.{os.getpid()}.tmp"
+    payload = {
+        "version": 1,
+        "portal": str(portal),
+        "prepared_at": int(time.time()),
+    }
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
+    os.replace(temp_path, path)
+
+
 def _prepare_user_data_dir(port: int) -> str:
     """병렬 모드 전용: 포트별 영속 user-data-dir (보안프로그램 재설치 생략 목적).
 
@@ -356,22 +420,20 @@ def _prepare_user_data_dir(port: int) -> str:
     WTAX_FRESH_PROFILE=1 (1/true/yes/on) 시 디버그용으로 프로필을 완전 초기화
     (구 %TEMP% 빈-dir 동작과 같은 효과). Chrome이 프로필을 잡고 있으면 rmtree가
     실패할 수 있으므로 stop 후 적용한다.
-    잔존 SingletonLock 파일이 있으면 정리(확장/세션 데이터는 보존).
+    Chrome의 프로필 잠금 파일은 강제로 삭제하지 않고 Chrome이 정리하도록 둔다.
     """
     fresh = (
         os.environ.get("WTAX_FRESH_PROFILE", "").strip().lower()
         in ("1", "true", "yes", "on")
     )
-    base = os.path.join(APP_DATA_DIR, "chrome-profiles")
-    path = os.path.join(base, f"cdp-{port}")
+    path = _parallel_profile_dir(port)
     if fresh:
         shutil.rmtree(path, ignore_errors=True)
     os.makedirs(path, exist_ok=True)
-    for lockname in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
-        try:
-            os.remove(os.path.join(path, lockname))
-        except OSError:
-            pass
+    # SingletonLock/Cookie/Socket을 여기서 강제로 지우지 않는다. CDP 포트가
+    # 응답하지 않는 기존 Chrome이 아직 이 프로필을 쓰는 경우가 있어, 잠금을
+    # 지우면 두 Chrome이 한 프로필을 동시에 열어 손상/엉뚱한 창 선택으로 이어질
+    # 수 있다. Chrome 자체가 종료된 프로필의 stale lock을 정리하게 둔다.
     return path
 
 
@@ -382,7 +444,6 @@ def launch_chrome(url="https://www.wehago.com/", *, port=CDP_PORT, force=False):
         url: 시작 시 열 URL
         port: CDP 디버그 포트(기본 CDP_PORT=env). 병렬 시 포트별 분리.
         force: True면 이미 CDP가 활성이어도 재실행
-
     Returns:
         dict: {success, chrome_path?, profile?, junction?, pid?, reused?,
                separate_user_data?, error?}
