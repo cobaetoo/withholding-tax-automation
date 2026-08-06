@@ -125,6 +125,9 @@ PAGE_LOAD_TIMEOUT_MS = 30000       # page.goto 타임아웃 (ms)
 DOWNLOAD_TIMEOUT_S = 60            # 인쇄물 다운로드
 MENU_NAV_DELAY_S = 2               # 메뉴 이동 후 안정화 대기
 POPUP_TIMEOUT_S = 15               # 팝업 출현 대기
+# 로그인 직후 대시보드/20209 준비 — POPUP_TIMEOUT_S(15)와 분리.
+# bootstrap hard-fail 이 15초로 너무 빡빡해 고용보험 준비가 실패하던 회귀 방지.
+EDI_READY_TIMEOUT_S = 40
 WORKPLACE_SEARCH_DELAY_S = 3       # 사업장조회/선택 후 대기
 
 # ─── 재시도 횟수 ───────────────────────────────────────────────────────────────

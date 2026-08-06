@@ -1,11 +1,12 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
-REM pythonw = 콘솔 창 없음. (python.exe 콘솔을 닫으면 GUI 도 같이 종료됨)
-where pythonw >nul 2>&1
-if %ERRORLEVEL%==0 (
-  start "" pythonw gui_main.py
-) else (
-  start "" pythonw.exe gui_main.py
-)
-exit /b 0
+REM ============================================================================
+REM  원천징수 자동화 GUI 실행
+REM  - 탐색기에서 찾기 쉬운 영문 이름: run_gui.bat (같은 폴더)
+REM  - IDE/에이전트가 대신 켠 프로세스는 세션 종료 시 같이 죽을 수 있습니다.
+REM  - pythonw = 콘솔 창 없음
+REM  - 종료 원인 로그: logs\lifecycle.log
+REM ============================================================================
+call "%~dp0run_gui.bat"
+exit /b %ERRORLEVEL%

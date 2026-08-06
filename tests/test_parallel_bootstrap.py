@@ -154,6 +154,101 @@ def test_failed_bootstrap_never_starts_next_portal_or_normal_batch(monkeypatch):
     assert events == [("bootstrap", "nps")]
 
 
+def test_mid_chain_bootstrap_failure_skips_comwel_and_normal_batch(monkeypatch):
+    """NPS 준비 성공 후 NHIS 실패 시 고용보험·--auto 를 시작하지 않는다 (실측 회귀)."""
+    runner = _runner()
+    specs = _specs()
+    events = []
+    killed = []
+
+    def ready(port, *, portal=None, **_k):
+        # 아직 마커 없음 — 전부 bootstrap 대상
+        return False
+
+    def fake_bootstrap(spec):
+        events.append(("bootstrap", spec["which"]))
+        return spec["which"] == "nps"  # NHIS 에서 실패
+
+    monkeypatch.setattr(runner, "_make_specs", lambda: specs)
+    monkeypatch.setattr(chrome_cdp, "is_parallel_profile_ready", ready)
+    monkeypatch.setattr(runner, "_bootstrap_one", fake_bootstrap)
+    monkeypatch.setattr(
+        runner, "_spawn",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("normal batch must not start after mid-chain bootstrap failure")),
+    )
+    monkeypatch.setattr(runner, "_kill_port_chromes", lambda: killed.append("kill"))
+
+    runner.run()
+
+    assert events == [("bootstrap", "nps"), ("bootstrap", "nhis")]
+    # bootstrap-only 실패 경로는 Chrome 을 유지 (세션 재사용).
+    assert killed == []
+
+
+def test_all_finished_emitted_after_run_completes(monkeypatch):
+    """run() 정상 종료 시 all_finished 가 한 번 나간다 (GUI 완료 슬롯 계약)."""
+    runner = _runner()
+    finished = []
+    runner.all_finished.connect(lambda: finished.append(True))
+    monkeypatch.setattr(runner, "_make_specs", _specs)
+    monkeypatch.setattr(chrome_cdp, "is_parallel_profile_ready", lambda *a, **k: True)
+    monkeypatch.setattr(
+        runner, "_spawn",
+        lambda *a, **k: _DoneProc(),
+    )
+    monkeypatch.setattr(runner, "_join_reader", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "_cleanup_child_processes", lambda: None)
+
+    runner.run()
+
+    assert finished == [True]
+    assert runner.isRunning() is False
+
+
+def test_bootstrap_failure_emits_bootstrap_failed_signal(monkeypatch):
+    """_bootstrap_one 이 exit≠0 이면 bootstrap_failed 시그널을 보낸다."""
+    runner = _runner()
+    failures = []
+    logs = []
+    runner.bootstrap_failed.connect(
+        lambda which, label, detail: failures.append((which, label, detail))
+    )
+    runner.log_message.connect(logs.append)
+
+    class _FailProc:
+        def __init__(self):
+            self.returncode = 1
+            self.stdout = []
+            self.pid = 99
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            pass
+
+    monkeypatch.setattr(
+        runner, "_spawn",
+        lambda spec, **_k: _FailProc(),
+    )
+    monkeypatch.setattr(runner, "_join_reader", lambda *a, **k: None)
+    monkeypatch.setattr(
+        chrome_cdp, "is_parallel_profile_ready",
+        lambda *a, **k: False,
+    )
+
+    ok = runner._bootstrap_one(_specs()[1])  # NHIS
+
+    assert ok is False
+    assert len(failures) == 1
+    assert failures[0][0] == "nhis"
+    assert "건강보험" in failures[0][1]
+    assert "exit=1" in failures[0][2]
+    assert any("업무 병렬 실행은 시작하지 않았습니다" in m or "시작하지 않았습니다" in m
+               for m in logs)
+
+
 def test_spawn_uses_bootstrap_flag_without_auto_and_normal_has_auto(monkeypatch):
     """frozen/dev 공통 child 인자 계약: 준비와 업무 배치를 섞지 않는다."""
     runner = _runner()
@@ -204,6 +299,8 @@ def test_bootstrap_marker_is_not_exposed_as_regular_log():
     ])
 
     runner._pump("nps")
+    # reader 는 큐만 채움 — QThread/테스트가 drain 해야 Signal 발생
+    runner.drain_events()
 
     assert "nps" in runner._bootstrap_ready
     assert logs == [
@@ -211,6 +308,18 @@ def test_bootstrap_marker_is_not_exposed_as_regular_log():
         "[NPS] 최초 보안/로그인 준비 완료",
         "[NPS] after",
     ]
+
+
+def test_pump_does_not_emit_until_drain():
+    """plain thread 가 Signal 을 직접 쏘지 않는 계약."""
+    runner = _runner()
+    logs = []
+    runner.log_message.connect(logs.append)
+    runner._procs["nhis"] = _PipeProc(["hello\n"])
+    runner._pump("nhis")
+    assert logs == []
+    assert runner.drain_events() == 1
+    assert logs == ["[NHIS] hello"]
 
 
 def test_profile_ready_marker_requires_matching_portal_and_respects_fresh(monkeypatch, tmp_path):

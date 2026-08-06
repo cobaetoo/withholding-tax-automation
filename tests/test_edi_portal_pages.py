@@ -121,6 +121,30 @@ def test_nhis_prelogin_close_popups_keeps_known_normal_edi_tab():
     assert popup.closed_by_helper is False
 
 
+def test_nhis_logged_in_page_prefers_retrieve_main_over_homeapp():
+    """homeapp 이 pages[0] 이어도 retrieveMain 을 메인으로 고른다."""
+    homeapp = _Page("https://edi.nhis.or.kr/homeapp/wep/m/other.xx")
+    main = _Page("https://edi.nhis.or.kr/homeapp/wep/m/retrieveMain.xx")
+    context = _Context([homeapp, main])
+
+    assert nhis_common._logged_in_page(context) is main
+
+
+def test_nhis_close_popups_keeps_edi_work_tabs_closes_security_popup():
+    """로그인 후 보안 팝업만 닫고 EDI 작업 탭(retrieveMain/homeapp)은 유지."""
+    popup = _Page("chrome-extension://security-popup")
+    homeapp = _Page("https://edi.nhis.or.kr/homeapp/wep/m/other.xx")
+    main = _Page("https://edi.nhis.or.kr/homeapp/wep/m/retrieveMain.xx")
+    context = _Context([popup, homeapp, main])
+
+    page = asyncio.run(nhis_common.close_popups(context))
+
+    assert page is main
+    assert popup.closed_by_helper is True
+    assert homeapp.closed_by_helper is False
+    assert main.closed_by_helper is False
+
+
 @pytest.mark.parametrize(
     "module",
     [nps_common, nhis_common, comwel_common],

@@ -74,6 +74,12 @@ async def open_received_docs(page, context):
         new_tab, _ = await wait_for_new_tab(context, "webedi", timeout=10)
         if new_tab:
             log("  웹EDI 탭 열림")
+            # 모니터/DPI 차이 완화 — CSS viewport 고정 (Chrome --window-size 와 맞춤)
+            try:
+                await new_tab.set_viewport_size({"width": 1920, "height": 1080})
+                await new_tab.bring_to_front()
+            except Exception:
+                pass
             return new_tab
 
         log(f"  시도 {attempt} 실패 — 새 탭 미감지")
@@ -245,30 +251,55 @@ async def select_doc_type(edi_page, doc_name="가입자 고지(산출) 내역서
     return True
 
 
+def _is_preview_url(url: str) -> bool:
+    """NHIS 인쇄 미리보기/리포트 뷰어 URL 여부.
+
+    예전 계약은 ``popup.html`` + ``WETZ`` 동시 매칭. 포털 폼 id/쿼리 인코딩이
+    바뀌거나 초기 about:blank→popup 리다이렉트 중에는 놓칠 수 있어 범위를 넓힌다.
+    """
+    if not url:
+        return False
+    u = url.lower()
+    if "popup.html" in u and "wetz" in u:
+        return True
+    if "popup.html" in u and "formname" in u:
+        return True
+    if "reportview" in u:
+        return True
+    if "crownix" in u:
+        return True
+    # 일부 환경에서 formname 이 인코딩된 채 WETZ 만 남는 경우
+    if "wetz" in u and ("popup" in u or "xfdl" in u):
+        return True
+    return False
+
+
 async def find_preview_tab(context, pages_before, timeout=PRINT_PREVIEW_TIMEOUT_S):
-    """popup.html + WETZ 미리보기 탭 감지
+    """인쇄 미리보기 탭 감지.
 
     새 탭(pages_before 이후) 우선, fallback으로 기존 탭에서 검색.
+    URL 판정은 ``_is_preview_url`` (popup/WETZ/reportview 등).
     """
     preview = None
     for _ in range(timeout):
         for pg in context.pages:
             try:
-                if "popup.html" in pg.url and "WETZ" in pg.url:
-                    if id(pg) not in pages_before:
-                        preview = pg
-                        break
+                if not _is_preview_url(pg.url or ""):
+                    continue
+                if id(pg) not in pages_before:
+                    preview = pg
+                    break
             except Exception:
                 continue
         if preview:
             break
         await asyncio.sleep(1)
 
-    # fallback: 기존 탭에서도 검색
+    # fallback: 기존 탭에서도 검색 (이전 실행 잔여 미리보기 등)
     if not preview:
         for pg in context.pages:
             try:
-                if "popup.html" in pg.url and "WETZ" in pg.url:
+                if _is_preview_url(pg.url or ""):
                     preview = pg
                     break
             except Exception:

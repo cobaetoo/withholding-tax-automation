@@ -116,14 +116,22 @@ def _logged_in_page(context):
     NHIS EDI 는 인증서 로그인 후 메인을 새 탭/창으로 띄우거나 보안 안내
     페이지를 거치는 경우가 있어, 처음 잡아둔 단일 탭의 url 만 보면 영원히
     감지 못 해 '로그인 상태로 멈춤' 이 된다. 전체 탭을 훑어 감지한다.
+
+    **retrieveMain 을 homeapp 보다 우선**한다. 로그인 직후 두 탭이 같이 있으면
+    homeapp 을 먼저 고르면 close_popups 가 실제 메인(retrieveMain)을 닫아
+    수임사업장선택 버튼 대기가 실패하고 bootstrap ready 마커가 안 쓰인다.
     """
+    homeapp = None
     for pg in context.pages:
         try:
-            if "retrieveMain" in pg.url or "homeapp" in pg.url:
+            url = pg.url or ""
+            if "retrieveMain" in url:
                 return pg
+            if homeapp is None and "homeapp" in url:
+                homeapp = pg
         except Exception:
             continue
-    return None
+    return homeapp
 
 
 async def wait_for_login(page):
@@ -169,14 +177,27 @@ async def wait_for_login(page):
     return False
 
 
+def _is_nhis_work_tab(page) -> bool:
+    """EDI 작업 탭(메인/서식/수임처 목록) 여부. 보안 팝업·확장 창은 False."""
+    try:
+        url = page.url or ""
+    except Exception:
+        return False
+    return "edi.nhis.or.kr" in url
+
+
 async def close_popups(context, preferred_page=None):
     """팝업/공지 탭 모두 닫고 메인만 남기기.
 
     로그인 전에는 ``retrieveMain`` 탭이 아직 없어 보안 팝업이 ``pages[0]``일 수 있다.
     이때 caller가 이미 고른 정상 EDI 탭을 ``preferred_page``로 넘기면 그 탭을
     유지한다.
+
+    로그인 직후에는 ``retrieveMain`` 을 우선 메인으로 고른 뒤, **보안/확장
+    팝업만** 닫는다. 다른 ``edi.nhis.or.kr`` 작업 탭은 버튼/렌더가 끝날 때까지
+    유지해 메인 탭이 실수로 닫히는 일을 막는다(이후 firm selector 가 탭을
+    재해석).
     """
-    main_page = None
     main_page = _logged_in_page(context)
 
     if not main_page:
@@ -198,9 +219,14 @@ async def close_popups(context, preferred_page=None):
         return None
 
     for pg in context.pages[:]:
-        if pg != main_page:
-            try:
-                await pg.close()
-            except Exception:
-                pass
+        if pg is main_page:
+            continue
+        # EDI 작업 탭은 유지 — homeapp/서식 탭을 닫아 retrieveMain 이 유실되던
+        # 회귀를 막는다. 보안모듈·확장·about:blank 등만 정리.
+        if _is_nhis_work_tab(pg):
+            continue
+        try:
+            await pg.close()
+        except Exception:
+            pass
     return main_page

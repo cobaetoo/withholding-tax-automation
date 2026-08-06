@@ -43,11 +43,20 @@ class MainWindow(QMainWindow):
         # 병렬 자동화(NPS+NHIS subprocess) — 단일 runner 와 독립, 회귀 0
         from src.ui.workers.parallel_cli_worker import ParallelCliRunner
         self.parallel_runner = ParallelCliRunner(self)
-        self.parallel_runner.log_message.connect(self._on_log)
-        self.parallel_runner.finished_one.connect(self._on_parallel_finished_one)
-        self.parallel_runner.all_finished.connect(self._on_parallel_finished)
-        self.parallel_runner.result_summary.connect(self._on_parallel_result_summary)
+        # 워커/reader 스레드에서 emit 되므로 QueuedConnection 명시 — 메인 스레드
+        # 슬롯에서만 UI/모달을 다룬다(직접 연결 시 QMessageBox 크래시 위험).
+        self.parallel_runner.log_message.connect(
+            self._on_log, Qt.ConnectionType.QueuedConnection)
+        self.parallel_runner.finished_one.connect(
+            self._on_parallel_finished_one, Qt.ConnectionType.QueuedConnection)
+        self.parallel_runner.all_finished.connect(
+            self._on_parallel_finished, Qt.ConnectionType.QueuedConnection)
+        self.parallel_runner.result_summary.connect(
+            self._on_parallel_result_summary, Qt.ConnectionType.QueuedConnection)
+        self.parallel_runner.bootstrap_failed.connect(
+            self._on_parallel_bootstrap_failed, Qt.ConnectionType.QueuedConnection)
         self._parallel_results = {}  # {which: {"total","completed","not_found":[...]}}
+        self._parallel_report_pending = False
 
         self._selected_phase = 1
         self._selected_job_id = 0
@@ -555,9 +564,69 @@ class MainWindow(QMainWindow):
         self._poll_step_detail()
 
     def _on_parallel_finished(self):
+        """병렬 QThread 종료 시그널 — UI 복구 후 리포트는 스레드 완전 종료 뒤로 미룸.
+
+        all_finished 는 run() finally 에서 emit 되어, 수신 시점에 QThread 가 아직
+        isRunning 일 수 있다. 그 상태에서 모달 QMessageBox 를 띄우면 이벤트 루프
+        재진입 + 스레드 종료 타이밍이 겹쳐 GUI abort → closeEvent/Job 으로
+        Chrome 까지 같이 죽는 현상이 있었다. 리포트 모달은 스레드가 멈춘 뒤에만.
+        """
         self.company_table.set_running(False)
         self._on_log("[병렬] 모든 subprocess 완료")
-        self._show_parallel_report()
+        self._parallel_report_pending = True
+        QTimer.singleShot(0, self._deferred_parallel_report)
+
+    def _deferred_parallel_report(self):
+        """QThread 가 완전히 멈춘 뒤에만 결과 모달을 표시한다."""
+        if not self._parallel_report_pending:
+            return
+        if self.parallel_runner.isRunning():
+            QTimer.singleShot(50, self._deferred_parallel_report)
+            return
+        self._parallel_report_pending = False
+        try:
+            self._show_parallel_report()
+        except Exception as e:
+            self._on_log(f"[병렬] 결과 리포트 표시 중 오류: {e!r}")
+            try:
+                QMessageBox.warning(
+                    self, "병렬 자동화 결과",
+                    f"결과 요약을 표시하는 중 오류가 났습니다.\n{e}",
+                )
+            except Exception:
+                pass
+
+    def _on_parallel_bootstrap_failed(self, which: str, label: str, detail: str):
+        """최초 보안/로그인 준비 실패 — 업무(--auto) 미시작을 모달로 명시.
+
+        bootstrap fail-stop 은 로그에만 남기면 사용자가 '로그인했는데 아무 일도
+        안 함 / 앱이 죽은 것 같다'로 오인한다. Chrome 은 유지되며 GUI 도 유지된다.
+        모달은 메인 이벤트 루프 idle 시점에 표시(워커 시그널 직후 재진입 회피).
+        """
+        self._on_log(f"[병렬 준비] {label} 실패 알림: {detail}")
+        self.statusBar().showMessage(
+            f"병렬 준비 실패: {label} — 수임처 업무가 시작되지 않았습니다",
+            15000,
+        )
+        # 클로저로 캡처 — Queued singleShot 에서 which/label/detail 유지
+        def _show():
+            try:
+                QMessageBox.warning(
+                    self,
+                    "공단 EDI 병렬 준비 실패",
+                    f"{label} 최초 보안/로그인 준비가 완료되지 않았습니다.\n\n"
+                    f"상세: {detail}\n\n"
+                    "· 이후 기관(예: 고용보험) 브라우저는 열리지 않습니다.\n"
+                    "· 선택/전체 수임처 자동 업무도 시작되지 않았습니다.\n"
+                    "· Chrome 창은 세션 재사용을 위해 유지됩니다 "
+                    "(창을 닫으면 세션이 사라집니다).\n"
+                    "· 해당 기관에 다시 로그인한 뒤 '선택건실행' 또는 "
+                    "'전체실행'을 다시 눌러 주세요.\n\n"
+                    "이미 준비된 기관은 재실행 시 bootstrap 을 건너뜁니다.",
+                )
+            except Exception as e:
+                self._on_log(f"[병렬 준비] 실패 알림 표시 오류: {e!r}")
+        QTimer.singleShot(0, _show)
 
     def _on_parallel_finished_one(self, which: str, success: bool):
         label = {"nps": "국민연금(NPS)", "nhis": "건강보험(NHIS)",
@@ -577,25 +646,41 @@ class MainWindow(QMainWindow):
 
         세 CLI(NPS/NHIS/고용보험)의 result_summary(마커) 결과를 합쳐, 한 건이라도
         not-found 가 있으면 QMessageBox 로 정리해 보여준다. 없으면 조용히 종료.
+
+        호출은 _deferred_parallel_report 경유(QThread 종료 후)를 전제로 한다.
         """
         PORTALS = [("nps", "국민연금"), ("nhis", "건강보험"), ("comwel", "고용보험")]
         sections = []
         log_parts = []
+        results = dict(self._parallel_results)
+        self._parallel_results = {}  # 다음 실행을 위해 초기화(표시 전 스냅샷)
         for which, label in PORTALS:
-            nf = self._parallel_results.get(which, {}).get("not_found", [])
+            raw = results.get(which) or {}
+            nf = raw.get("not_found") or []
+            if not isinstance(nf, list):
+                nf = []
             log_parts.append(f"{label} 미탐색 {len(nf)}건")
             if nf:
                 sections.append((label, nf))
         self._on_log(f"[병렬] 리포트 수신: {', '.join(log_parts)}")
-        self._parallel_results = {}  # 다음 실행을 위해 초기화
         if not sections:
+            # 8월 등 자료 0건이어도 not_found 가 비어 있으면 조용히 종료됐음.
+            # 완료 자체를 알려 사용자가 '앱이 죽은 것'으로 오인하지 않게 한다.
+            self.statusBar().showMessage("병렬 자동화 완료", 10000)
             return
         lines = ["탐색 실패(스킵) 수임처 요약", ""]
         for label, nf in sections:
             lines.append(f"■ {label}: {len(nf)}건")
             for s in nf:
-                lines.append(f"   - {s.get('name', '?')} [{s.get('reason', '?')}]")
+                if isinstance(s, dict):
+                    name = s.get("name", "?")
+                    reason = s.get("reason", "?")
+                else:
+                    name, reason = str(s), "?"
+                lines.append(f"   - {name} [{reason}]")
             lines.append("")
+        # parent=self 모달은 메인 윈도우 종료와 수명을 묶는다. 스레드 종료 후
+        # 호출되므로 확인 클릭 시 GUI/Chrome 이 같이 죽지 않아야 한다.
         QMessageBox.information(self, "병렬 자동화 결과", "\n".join(lines))
 
     def _on_runner_finished(self):
@@ -728,6 +813,40 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("세션 종료됨. 다시 시작하려면 '전체실행'을 눌러주세요.")
 
     def closeEvent(self, event):
+        parallel_running = False
+        try:
+            parallel_running = self.parallel_runner.is_running()
+        except Exception:
+            pass
+        try:
+            from src.utils.lifecycle_log import log_event
+            log_event(
+                "closeEvent",
+                parallel_running=parallel_running,
+                automation=getattr(self, "_automation_active", False),
+            )
+        except Exception:
+            pass
+
+        # 실행 중 창 닫기 확인 — 실수로 닫아 브라우저까지 죽는 것 방지
+        if parallel_running or self._automation_active:
+            reply = QMessageBox.warning(
+                self, "종료 확인",
+                "자동화가 진행 중입니다.\n"
+                "지금 종료하면 브라우저(공단 EDI)도 함께 닫힙니다.\n\n"
+                "정말 종료하시겠습니까?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                try:
+                    from src.utils.lifecycle_log import log_event
+                    log_event("closeEvent.cancelled")
+                except Exception:
+                    pass
+                event.ignore()
+                return
+
         self._poll_timer.stop()
         self._auth_timer.stop()
         self._update_timer.stop()
@@ -738,7 +857,12 @@ class MainWindow(QMainWindow):
         self._cleanup_worker("_update_worker")
         # 최초 보안환경 준비 중인 병렬 child/Chrome도 종료해야 다음 실행이 기존
         # profile lock·stale CDP 포트에 붙지 않는다.
-        if self.parallel_runner.is_running():
+        # (창 닫기 = stop → 포트별 Chrome taskkill. 사용자가 '앱+브라우저가 같이
+        # 꺼졌다'고 느끼는 정상 경로이므로 로그로 남긴다.)
+        if parallel_running:
+            self._on_log(
+                "[병렬] closeEvent — 실행 중 병렬 child/Chrome 을 종료합니다"
+            )
             self.parallel_runner.stop()
             self.parallel_runner.wait(5000)
         self.runner.request_stop()
@@ -778,7 +902,29 @@ class MainWindow(QMainWindow):
         """세션을 초기화하고 로그인 다이얼로그를 표시.
 
         성공 시 타이머 재시작, 취소 시 앱 종료.
+        단, 병렬/자동화 실행 중에는 강제 quit 하지 않는다(실행 중 꺼짐 방지).
         """
+        try:
+            from src.utils.lifecycle_log import log_event
+            log_event(
+                "auth.relogin_prompt",
+                parallel=self.parallel_runner.is_running(),
+                automation=self._automation_active,
+            )
+        except Exception:
+            pass
+
+        # 실행 중 인증 만료: 모달로 작업을 끊지 않고 안내만
+        if self.parallel_runner.is_running() or self._automation_active:
+            self._on_log(
+                "[인증] 세션이 만료되었지만 자동화가 진행 중입니다. "
+                "작업 종료 후 다시 로그인해 주세요."
+            )
+            self.statusBar().showMessage(
+                "인증 만료 — 자동화 종료 후 다시 로그인해 주세요", 15000,
+            )
+            return
+
         auth.clear_session()
         self._auth_timer.stop()
 
@@ -786,6 +932,11 @@ class MainWindow(QMainWindow):
         from src.ui.widgets.login_dialog import LoginDialog
         login_dlg = LoginDialog(self)
         if login_dlg.exec() != QDialog.Accepted:
+            try:
+                from src.utils.lifecycle_log import log_event
+                log_event("quit.path", reason="relogin_cancelled")
+            except Exception:
+                pass
             QApplication.quit()
             return
 
@@ -797,7 +948,7 @@ class MainWindow(QMainWindow):
     def _on_logout(self):
         """로그아웃 → 세션 삭제 → 로그인 다이얼로그 재표시."""
         # 자동화 진행 중이면 확인
-        if self._automation_active:
+        if self._automation_active or self.parallel_runner.is_running():
             reply = QMessageBox.warning(
                 self, "로그아웃",
                 "자동화 작업이 진행 중입니다.\n정말 로그아웃하시겠습니까?",
@@ -814,6 +965,11 @@ class MainWindow(QMainWindow):
         from src.ui.widgets.login_dialog import LoginDialog
         login_dlg = LoginDialog(self)
         if login_dlg.exec() != QDialog.Accepted:
+            try:
+                from src.utils.lifecycle_log import log_event
+                log_event("quit.path", reason="logout_cancelled")
+            except Exception:
+                pass
             QApplication.quit()
             return
 
@@ -1156,6 +1312,11 @@ class MainWindow(QMainWindow):
         elif mandatory and clicked == btn_quit:
             updater.log_event(f"prompt: quit v={version} (mandatory)")
             self._update_in_progress = False
+            try:
+                from src.utils.lifecycle_log import log_event
+                log_event("quit.path", reason="mandatory_update_quit")
+            except Exception:
+                pass
             QApplication.quit()
         elif (not mandatory) and btn_skip is not None and clicked == btn_skip:
             updater.log_event(f"prompt: skip v={version}")
@@ -1261,4 +1422,9 @@ class MainWindow(QMainWindow):
             )
             return
 
+        try:
+            from src.utils.lifecycle_log import log_event
+            log_event("quit.path", reason="apply_update")
+        except Exception:
+            pass
         QApplication.quit()

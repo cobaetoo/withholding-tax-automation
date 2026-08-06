@@ -248,7 +248,7 @@ async def main(args=None):
                 log(f"ERROR: 최초 준비 상태를 저장하지 못했습니다: {e}")
                 return False
             emit_bootstrap_ready()
-            log("최초 보안/로그인 준비 완료. 다음 기관 준비를 진행합니다.")
+            log("최초 보안/로그인 준비 완료. Chrome 은 유지되며 다음 기관 준비를 진행합니다.")
             return True
         if not nexacro_ready:
             log("  WARN: Nexacro 준비 타임아웃 — 계속 진행")

@@ -95,14 +95,18 @@ subprocess의 종료 코드가 0으로 남고 GUI가 실패를 완료처럼 보�
 
 - 코드 조사 및 수정: 완료
 - 최초 프로필 순차 bootstrap과 정상 업무 병렬 실행: 구현 완료
-- 자동 테스트: `pytest -q` 전체 **299 passed**
+- 자동 테스트: `pytest -q` 전체 통과 (v1.1.4 기준 lifecycle/NHIS 상세 진입 포함)
 - 신규 회귀: `test_parallel_bootstrap.py`(준비 순서·중단·fresh 프로필),
   `test_edi_portal_pages.py`(보안 팝업·CDP 단절),
-  `test_gui_cli_dispatch.py`(frozen child 실패 코드)
+  `test_gui_cli_dispatch.py`(frozen child 실패 코드),
+  `test_nhis_preview_url.py` / `test_lifecycle_log.py`
 - 변경 파일 컴파일 검사 및 `git diff --check`: 통과
-- 새 빌드 생성: 완료 (2026-08-06, v1.1.3 보호 빌드·Inno Setup 설치 파일 생성)
-- 실제 새 설치 환경/보안모듈 동작 검증: 미실행
+- 보호 빌드: v1.1.3 시점에 생성. v1.1.4 는 코드·라이브 검증 후 재빌드 권장
+- **라이브(기존 프로필, 2026-08-06):** 선택건 1~2건 공단 EDI 병렬에서
+  NPS·NHIS·고용보험 다운로드 성공(§18 handoff 참조)
+- 실제 새 설치 환경/보안모듈 첫 실행 스모크: 미실행(권장 게이트 유지)
 
 실제 검증은 기존 사용자 프로필을 지우지 말고, 별도 Windows 사용자 또는 VM의 새
 설치 환경에서 단일 수임처로 수행해야 한다. 첫 실행에서는 세 기관의 준비 창이
 순차로 진행된 후, 세 창이 모두 준비된 시점에만 실제 병렬 업무가 시작되어야 한다.
+GUI 기동은 탐색기에서 `run_gui.bat` 사용을 권장한다.

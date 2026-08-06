@@ -80,6 +80,7 @@ def test_pump_routes_marker_to_result_summary():
         "또 다른 로그\n",
     ])
     runner._pump("nps")
+    runner.drain_events()  # reader 큐 → Signal (직접 emit 안 함)
 
     # 마커는 log_message 에서 제외
     assert logs == ["[NPS] 일반 로그", "[NPS] 또 다른 로그"]

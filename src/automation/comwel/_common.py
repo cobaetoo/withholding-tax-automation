@@ -44,7 +44,8 @@ from src.automation.comwel._constants import (
     SAMU_POPUP_CLOSE_ID,
     BTN_INQUIRY,
     LOGIN_TIMEOUT_S, PAGE_LOAD_TIMEOUT_MS, DOWNLOAD_TIMEOUT_S,
-    MENU_NAV_DELAY_S, POPUP_TIMEOUT_S, WORKPLACE_SEARCH_DELAY_S,
+    MENU_NAV_DELAY_S, POPUP_TIMEOUT_S, EDI_READY_TIMEOUT_S,
+    WORKPLACE_SEARCH_DELAY_S,
     PRINT_CLICK_RETRIES,
 )
 
@@ -107,6 +108,9 @@ async def wait_for_login(page):
     mf_wfm_header_btn_logout)이 가시 상태가 되면 로그인 완료로 판정한다.
     (라이브 검증: 로그인 전 logout 비가시, 후 가시 → 가장 안정적 신호.
     기존 btnLogin/guestView 는 로그인 페이지(#/)에서 존재조차 안 해 신뢰 불가.)
+
+    인증이 다른 탭/창에서 끝나는 경우를 위해 context 전체 탭을 스캔한다(NHIS 패턴).
+    단, CDP 단절은 15분 폴링으로 넘어가지 않고 즉시 실패한다.
     """
     async def _logged_in(p) -> bool:
         # CDP/page 단절은 호출부에서 즉시 실패로 전환해야 한다. 여기서 예외를
@@ -118,13 +122,67 @@ async def wait_for_login(page):
             return r.width > 0 && r.height > 0;
         }""", LOGOUT_BTN_ID)
 
+    def _sibling_pages():
+        siblings = []
+        try:
+            for pg in page.context.pages:
+                if pg is page:
+                    continue
+                try:
+                    if not pg.is_closed():
+                        siblings.append(pg)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return siblings
+
+    async def _check_login_state():
+        """(logged_in: bool, fatal_error: Exception|None).
+
+        - logged_in True → 로그인 완료
+        - fatal_error set → CDP/페이지 단절 (폴링 중단)
+        - 둘 다 아님 → 아직 미로그인, 폴링 계속
+        """
+        last_err = None
+        try:
+            closed = page.is_closed()
+        except Exception as e:
+            return False, e
+
+        if not closed:
+            try:
+                if await _logged_in(page):
+                    return True, None
+            except Exception as e:
+                last_err = e
+
+        for pg in _sibling_pages():
+            try:
+                if await _logged_in(pg):
+                    return True, None
+            except Exception as e:
+                last_err = e
+
+        if closed and not _sibling_pages():
+            return False, RuntimeError("browser window closed")
+        # 원 탭 CDP 오류 + 형제 탭에서도 확인 불가 → 단절로 간주
+        if last_err is not None and not _sibling_pages():
+            return False, last_err
+        return False, None
+
     try:
-        if page.is_closed():
-            log("ERROR: 근로복지공단 EDI 브라우저 창이 닫혔습니다. 다시 실행해 주세요.")
-            return False
-        if await _logged_in(page):
+        logged_in, fatal = await _check_login_state()
+        if logged_in:
             log("이미 로그인되어 있습니다.")
             return True
+        if fatal is not None:
+            msg = str(fatal)
+            if "closed" in msg.lower():
+                log("ERROR: 근로복지공단 EDI 브라우저 창이 닫혔습니다. 다시 실행해 주세요.")
+            else:
+                log(f"ERROR: 근로복지공단 EDI 브라우저 연결을 확인할 수 없습니다: {fatal}")
+            return False
     except Exception as e:
         log(f"ERROR: 근로복지공단 EDI 브라우저 연결을 확인할 수 없습니다: {e}")
         return False
@@ -135,12 +193,17 @@ async def wait_for_login(page):
     for i in range(LOGIN_TIMEOUT_S // 5):
         await asyncio.sleep(5)
         try:
-            if page.is_closed():
-                log("ERROR: 근로복지공단 EDI 브라우저 창이 닫혔습니다. 다시 실행해 주세요.")
-                return False
-            if await _logged_in(page):
+            logged_in, fatal = await _check_login_state()
+            if logged_in:
                 log("로그인 확인됨.")
                 return True
+            if fatal is not None:
+                msg = str(fatal)
+                if "closed" in msg.lower():
+                    log("ERROR: 근로복지공단 EDI 브라우저 창이 닫혔습니다. 다시 실행해 주세요.")
+                else:
+                    log(f"ERROR: 근로복지공단 EDI 브라우저 연결이 끊겼습니다: {fatal}")
+                return False
         except Exception as e:
             log(f"ERROR: 근로복지공단 EDI 브라우저 연결이 끊겼습니다: {e}")
             return False
@@ -171,13 +234,22 @@ async def close_samu_popup(page):
     return closed
 
 
-async def wait_for_edi_ready(page, max_wait: int = POPUP_TIMEOUT_S):
-    """로그인 후 대시보드 또는 20209 업무 화면이 실제 조작 가능한지 확인한다."""
-    for _ in range(max_wait):
+async def wait_for_edi_ready(page, max_wait: int = EDI_READY_TIMEOUT_S):
+    """로그인 후 대시보드 또는 20209 업무 화면이 실제 조작 가능한지 확인한다.
+
+    기본 타임아웃은 EDI_READY_TIMEOUT_S(40). 팝업 대기(POPUP_TIMEOUT_S=15)와
+    분리 — bootstrap 에서 15초 hard-fail 로 준비 마커가 안 쓰이던 회귀 방지.
+    """
+    for i in range(max_wait):
         try:
             if page.is_closed():
                 log("ERROR: 근로복지공단 EDI 브라우저 창이 닫혔습니다.")
                 return False
+            if i % 5 == 0:
+                try:
+                    await page.bring_to_front()
+                except Exception:
+                    pass
             ready = await page.evaluate(r"""(ids) => {
                 if (document.readyState !== 'complete') return false;
                 return ids.some((id) => {
@@ -193,7 +265,10 @@ async def wait_for_edi_ready(page, max_wait: int = POPUP_TIMEOUT_S):
             log(f"ERROR: 근로복지공단 EDI 준비 상태를 확인할 수 없습니다: {e}")
             return False
         await asyncio.sleep(1)
-    log("ERROR: 근로복지공단 EDI 대시보드/20209 화면 준비 시간이 초과되었습니다.")
+    log(
+        f"ERROR: 근로복지공단 EDI 대시보드/20209 화면 준비 시간이 초과되었습니다 "
+        f"({max_wait}s)."
+    )
     return False
 
 

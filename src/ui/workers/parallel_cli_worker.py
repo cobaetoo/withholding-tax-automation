@@ -4,9 +4,14 @@
 stdout 을 폴링해 [NPS]/[NHIS]/[고용] 접두사 로그로 방출한다.
 정지는 proc.pid 를 taskkill /T (CLI→Chrome 트리 종료) — kill_chrome(port=) 은
 GUI 프로세스의 _launched_pids 가 비어있어(자식 CLI 메모리) 안 통하므로 우회.
+
+stdout reader 는 plain threading.Thread 이다. 여기서 Qt Signal 을 직접 emit 하면
+PySide 크로스스레드 이슈로 GUI abort 가 날 수 있어, 큐에 적재한 뒤 QThread.run
+경로에서만 emit 한다.
 """
 import os
 import sys
+import queue
 import subprocess
 import threading
 import time
@@ -39,6 +44,8 @@ class ParallelCliRunner(QThread):
     finished_one = Signal(str, bool)
     all_finished = Signal()
     result_summary = Signal(str, str)
+    # which, label, detail — bootstrap 실패 시 GUI 모달/상태바용 (업무 미시작 안내)
+    bootstrap_failed = Signal(str, str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -52,6 +59,8 @@ class ParallelCliRunner(QThread):
         self._stop_requested = threading.Event()
         self._state_lock = threading.RLock()
         self._bootstrap_ready = set()
+        # reader thread → QThread drain 전용 (Signal 직접 emit 금지)
+        self._out_q: queue.Queue = queue.Queue()
 
     def start(self, *, nps_port=9223, nhis_port=9224, comwel_port=9225,
               firms=None, mgmts=None, year=None, month=None):
@@ -73,6 +82,21 @@ class ParallelCliRunner(QThread):
             self._bootstrap_ready.clear()
             self._stop_requested.clear()
             self._active = True
+            # 이전 실행 잔여 이벤트 비우기
+            while True:
+                try:
+                    self._out_q.get_nowait()
+                except queue.Empty:
+                    break
+        try:
+            from src.utils.lifecycle_log import log_event
+            log_event(
+                "parallel.start",
+                nps=nps_port, nhis=nhis_port, comwel=comwel_port,
+                firms=len(firms or []),
+            )
+        except Exception:
+            pass
         super().start()
 
     def _make_specs(self):
@@ -157,8 +181,46 @@ class ParallelCliRunner(QThread):
             self._readers[spec["which"]] = reader
         return proc
 
+    def _enqueue(self, item) -> None:
+        """reader → QThread 이벤트 큐. 절대 여기서 Signal.emit 하지 않는다."""
+        try:
+            self._out_q.put(item)
+        except Exception:
+            pass
+
+    def drain_events(self, max_items: int = 2000) -> int:
+        """큐에 쌓인 이벤트를 Signal 로 방출. QThread 또는 테스트 스레드에서 호출.
+
+        Returns: 처리한 이벤트 수.
+        """
+        n = 0
+        while n < max_items:
+            try:
+                item = self._out_q.get_nowait()
+            except queue.Empty:
+                break
+            n += 1
+            try:
+                kind = item[0]
+                if kind == "log":
+                    self.log_message.emit(item[1])
+                elif kind == "result":
+                    self.result_summary.emit(item[1], item[2])
+                else:
+                    # 알 수 없는 항목은 로그로
+                    self.log_message.emit(f"[병렬] unknown event: {item!r}")
+            except Exception as e:
+                try:
+                    self.log_message.emit(f"[병렬] drain 예외: {e!r}")
+                except Exception:
+                    pass
+        return n
+
     def _pump(self, which, proc=None):
-        """stdout reader. proc를 캡처해 bootstrap/normal 키 재사용 레이스를 막는다."""
+        """stdout reader — Qt Signal 금지, 큐 적재만.
+
+        proc를 캡처해 bootstrap/normal 키 재사용 레이스를 막는다.
+        """
         prefix = {"nps": "[NPS]", "nhis": "[NHIS]", "comwel": "[고용]"}.get(
             which, f"[{which.upper()}]")
         if proc is None:  # 기존 테스트/호출부 호환
@@ -172,22 +234,33 @@ class ParallelCliRunner(QThread):
                 if line == _BOOTSTRAP_READY_MARKER:
                     with self._state_lock:
                         self._bootstrap_ready.add(which)
-                    self.log_message.emit(f"{prefix} 최초 보안/로그인 준비 완료")
+                    self._enqueue(
+                        ("log", f"{prefix} 최초 보안/로그인 준비 완료"),
+                    )
                     continue
                 if line.startswith(_RESULT_MARKER):
-                    self.result_summary.emit(which, line[len(_RESULT_MARKER):].strip())
+                    self._enqueue((
+                        "result", which,
+                        line[len(_RESULT_MARKER):].strip(),
+                    ))
                     continue
-                self.log_message.emit(f"{prefix} {line}")
+                self._enqueue(("log", f"{prefix} {line}"))
         except Exception as e:
-            self.log_message.emit(f"{prefix} [reader 예외] {e!r}")
+            self._enqueue(("log", f"{prefix} [reader 예외] {e!r}"))
 
     def _wait_for_process(self, proc):
-        """정지 요청도 즉시 반영할 수 있도록 poll 기반으로 기다린다."""
+        """정지 요청도 즉시 반영할 수 있도록 poll 기반으로 기다린다.
+
+        대기 중 reader 큐를 drain 해 로그가 쌓이지 않게 한다.
+        """
         if proc is None:
             return None
         while proc.poll() is None:
-            if self._stop_requested.wait(0.1):
+            self.drain_events()
+            if self._stop_requested.wait(0.05):
+                self.drain_events()
                 return None
+        self.drain_events()
         return proc.returncode
 
     def _join_reader(self, which, proc, *, timeout=5.0):
@@ -259,15 +332,20 @@ class ParallelCliRunner(QThread):
         """한 포털의 신규 프로필을 로그인 가능한 상태까지 순차 준비한다."""
         self.log_message.emit(
             f"[병렬 준비] {spec['label']} 최초 보안환경을 준비합니다. "
-            "열린 브라우저에서 로그인해 주세요."
+            "열린 브라우저에서 로그인해 주세요. "
+            "(준비 CLI 는 로그인 후 종료되며 Chrome 창은 유지됩니다.)"
         )
         with self._state_lock:
             self._bootstrap_ready.discard(spec["which"])
         proc = self._spawn(spec, bootstrap_only=True)
         if proc is None:
+            detail = "정지 요청 또는 spawn 실패로 child 를 시작하지 못했습니다."
+            self.log_message.emit(f"[병렬 준비] {spec['label']} 준비 실패 — {detail}")
+            self.bootstrap_failed.emit(spec["which"], spec["label"], detail)
             return False
         returncode = self._wait_for_process(proc)
         self._join_reader(spec["which"], proc)
+        self.drain_events()
         if self._stop_requested.is_set():
             return False
 
@@ -279,15 +357,29 @@ class ParallelCliRunner(QThread):
         )
         if returncode == 0 and marker_seen and profile_ready:
             self.log_message.emit(
-                f"[병렬 준비] {spec['label']} 준비 완료. 다음 기관을 준비합니다."
+                f"[병렬 준비] {spec['label']} 준비 완료 "
+                f"(port={spec['port']}, Chrome 유지). 다음 기관을 준비합니다."
             )
             return True
 
-        self.log_message.emit(
-            f"[병렬 준비] {spec['label']} 준비 실패 "
-            f"(exit={returncode}, ready-marker={marker_seen}, profile={profile_ready}). "
-            "업무 병렬 실행은 시작하지 않았습니다."
+        detail = (
+            f"exit={returncode}, ready-marker={marker_seen}, "
+            f"profile={profile_ready}, port={spec['port']}"
         )
+        self.log_message.emit(
+            f"[병렬 준비] {spec['label']} 준비 실패 ({detail}). "
+            "이후 기관 bootstrap 과 선택/전체 수임처 업무(--auto)는 시작하지 않았습니다. "
+            "Chrome 창은 세션 재사용을 위해 유지됩니다."
+        )
+        self.bootstrap_failed.emit(spec["which"], spec["label"], detail)
+        try:
+            from src.utils.lifecycle_log import log_event
+            log_event(
+                "parallel.bootstrap_failed",
+                which=spec["which"], detail=detail,
+            )
+        except Exception:
+            pass
         return False
 
     def run(self):
@@ -298,18 +390,39 @@ class ParallelCliRunner(QThread):
             specs = self._make_specs()
             from src.utils.chrome_cdp import is_parallel_profile_ready
             bootstrap_performed = False
-            for spec in specs:
+            for idx, spec in enumerate(specs):
                 if self._stop_requested.is_set():
                     return
                 if is_parallel_profile_ready(spec["port"], portal=spec["portal"]):
+                    self.log_message.emit(
+                        f"[병렬 준비] {spec['label']} 이미 준비됨 "
+                        f"(port={spec['port']}) — bootstrap 생략"
+                    )
                     continue
                 bootstrap_performed = True
                 if not self._bootstrap_one(spec):
+                    # 이후 기관이 있으면 왜 안 켜졌는지 명시 (증상: 고용보험 미오픈).
+                    remaining = [s["label"] for s in specs[idx + 1:]]
+                    if remaining:
+                        self.log_message.emit(
+                            f"[병렬 준비] 이전 기관 실패로 시작하지 않음: "
+                            f"{', '.join(remaining)}"
+                        )
+                    firms = self._request.get("firms") or []
+                    if firms:
+                        self.log_message.emit(
+                            f"[병렬 준비] 선택/지정 수임처 {len(firms)}건 업무도 "
+                            "시작하지 않았습니다 (bootstrap 미완료)."
+                        )
                     return
 
             if self._stop_requested.is_set():
                 return
-            self.log_message.emit("[병렬] 보안환경 준비 완료 — 세 기관 업무를 병렬 시작합니다.")
+            firms = self._request.get("firms") or []
+            self.log_message.emit(
+                "[병렬] 보안환경 준비 완료 — 세 기관 업무를 병렬 시작합니다"
+                + (f" (수임처 {len(firms)}건)." if firms else ".")
+            )
             for spec in specs:
                 if self._stop_requested.is_set():
                     return
@@ -327,22 +440,60 @@ class ParallelCliRunner(QThread):
             # 마지막 결과 마커까지 reader가 처리된 뒤 UI 완료를 알린다.
             for spec, proc in normal:
                 self._join_reader(spec["which"], proc)
+            self.drain_events()
             normal_completed = True
         except Exception as e:
             self.log_message.emit(f"[병렬] 실행 준비 중 예외: {e!r}")
+            try:
+                from src.utils.lifecycle_log import log_event
+                log_event("parallel.exception", err=repr(e))
+            except Exception:
+                pass
         finally:
             self._cleanup_child_processes()
+            self.drain_events()
             # 정상 완료 때는 다음 실행의 세션 재사용을 위해 Chrome을 남긴다. 반면
             # normal child를 하나라도 띄운 뒤 중단·spawn 예외가 나면 detached Chrome이
             # 남을 수 있으므로 포트 기준으로도 정리한다.
             if normal and not normal_completed:
+                self.log_message.emit(
+                    "[병렬] 업무 배치 미완료 — CDP 포트 Chrome 정리 "
+                    f"({self._nps_port}/{self._nhis_port}/{self._comwel_port})"
+                )
                 self._kill_port_chromes()
             with self._state_lock:
                 self._active = False
-            self.all_finished.emit()
+            try:
+                from src.utils.lifecycle_log import log_event
+                log_event(
+                    "parallel.finished",
+                    normal_completed=normal_completed,
+                    normal_count=len(normal),
+                )
+            except Exception:
+                pass
+            # all_finished 는 워커 스레드에서 emit → GUI 는 QueuedConnection 으로
+            # 수신 후 QThread.isRunning() 이 False 가 될 때까지 모달을 미룬다.
+            # (run() 안 모달 직행 시 스레드 종료 레이스로 프로세스 abort 가능)
+            try:
+                self.all_finished.emit()
+            except Exception as e:
+                try:
+                    self.log_message.emit(f"[병렬] all_finished emit 실패: {e!r}")
+                except Exception:
+                    pass
 
     def stop(self):
         """bootstrap 또는 업무 child와 포트별 Chrome을 모두 중단한다."""
+        try:
+            from src.utils.lifecycle_log import log_event
+            log_event("parallel.stop")
+        except Exception:
+            pass
+        self.log_message.emit(
+            f"[병렬] stop — child CLI 및 Chrome 종료 "
+            f"(ports {self._nps_port}/{self._nhis_port}/{self._comwel_port})"
+        )
         self._stop_requested.set()
         self.requestInterruption()
         with self._state_lock:

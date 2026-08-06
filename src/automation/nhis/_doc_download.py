@@ -33,6 +33,8 @@ from src.automation.nhis._constants import (
     BTN_PRINT,
     GRID_BODY_ID,
     PRINT_CLICK_RETRIES,
+    PRINT_PREVIEW_TIMEOUT_S,
+    PRINT_BUTTON_READY_TIMEOUT_S,
     CROWNIX_LOAD_TIMEOUT_S,
     PDF_DOWNLOAD_TIMEOUT_S,
     PAGE_STABLE_TIMEOUT_S,
@@ -42,34 +44,212 @@ from src.automation.nhis._doc_access import (
     select_doc_type,
     find_preview_tab,
 )
+from src.utils.nexacro import nexacro_click_button_viewport
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 인쇄 버튼 3전략
+# 인쇄 버튼 준비 / 클릭
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def _click_print_button(edi_page, context, pages_before):
-    """인쇄 버튼 3전략 클릭. 미리보기 탭 Page 반환 또는 None.
+async def _print_button_geometry(edi_page):
+    """인쇄 버튼 bounding box. 없거나 예외 시 None."""
+    try:
+        return await edi_page.evaluate(f"""() => {{
+            const btn = document.getElementById('{BTN_PRINT}');
+            if (!btn) return null;
+            const r = btn.getBoundingClientRect();
+            const style = window.getComputedStyle(btn);
+            return {{
+                w: r.width, h: r.height, x: r.x, y: r.y,
+                display: style.display, visibility: style.visibility,
+                opacity: style.opacity,
+            }};
+        }}""")
+    except Exception:
+        return None
 
-    전략 1: JS MouseEvent 시뮬레이션 (기존 방식)
-    전략 2: Playwright locator.click(force=True)
-    전략 3: DOM element.focus() + element.click()
 
-    각 전략 후 find_preview_tab으로 미리보기 탭 오픈 확인.
-    전체 최대 3회 재시도.
+async def _wait_print_button_ready(edi_page, timeout_s=PRINT_BUTTON_READY_TIMEOUT_S):
+    """문서 상세 진입 후 인쇄 툴바가 실제 조작 가능해질 때까지 대기.
+
+    목록 화면에서도 인쇄 버튼 DOM id 는 존재하지만 w/h=0 인 경우가 많다.
+    합성 클릭만 하면 'ok' 로 보이지만 Nexacro 가 no-op → 미리보기 미오픈.
     """
-    for attempt in range(PRINT_CLICK_RETRIES):
-        # ── 전략 1: JS MouseEvent 시뮬레이션 ──
-        log(f"  [1] JS MouseEvent 시뮬레이션... (시도 {attempt + 1}/{PRINT_CLICK_RETRIES})")
+    try:
+        await edi_page.bring_to_front()
+    except Exception:
+        pass
+    for i in range(timeout_s):
+        geo = await _print_button_geometry(edi_page)
+        if geo and geo.get("w", 0) > 2 and geo.get("h", 0) > 2:
+            if geo.get("visibility") != "hidden" and geo.get("display") != "none":
+                log(f"  인쇄 버튼 준비 완료 ({i + 1}초, {geo['w']:.0f}x{geo['h']:.0f})")
+                return True
+        if i % 5 == 4:
+            log(f"  인쇄 버튼 가시 대기 중... ({i + 1}s) geo={geo!r}")
+            try:
+                await edi_page.bring_to_front()
+            except Exception:
+                pass
+        await asyncio.sleep(1)
+    geo = await _print_button_geometry(edi_page)
+    log(f"  ERROR: 인쇄 버튼이 가시 상태가 아님 ({timeout_s}s) geo={geo!r}")
+    return False
+
+
+async def _click_print_once(edi_page, context, pages_before, strategy: str,
+                            *, preview_timeout: int = 5):
+    """한 전략으로 인쇄 클릭 후 미리보기 탭 탐색. 성공 시 Page, 아니면 None.
+
+    preview_timeout: 전략당 대기(초). 전체 라운드 폭주를 막기 위해 기본 5초.
+    """
+
+    async def _after_click(label: str):
+        # 새 탭이 뜨는 동안 expect 대신 폴링 — 이미 열린 탭도 find_preview 가 커버.
+        preview = await find_preview_tab(
+            context, pages_before, timeout=preview_timeout,
+        )
+        if preview:
+            url = ""
+            try:
+                url = (preview.url or "")[:100]
+            except Exception:
+                pass
+            log(f"  [{label}] 성공 — 미리보기 탭 오픈 ({url})")
+            return preview
+        log(f"  [{label}] 클릭 후 미리보기 탭 미감지")
+        return None
+
+    try:
+        await edi_page.bring_to_front()
+    except Exception:
+        pass
+
+    if strategy == "nexacro_api":
+        log("  [1] Nexacro 컴포넌트 click() API (좌표 비의존)...")
+        try:
+            result = await edi_page.evaluate("""() => {
+                try {
+                    var n = window.nexacro;
+                    if (!n || !n.Application) return {ok: false, msg: 'no nexacro'};
+                    var form = n.Application.mainframe.childframe.form;
+                    if (!form) return {ok: false, msg: 'no form'};
+                    var candidates = [];
+                    function walk(comp, depth) {
+                        if (!comp || depth > 6) return;
+                        try {
+                            if (comp.id && String(comp.id).toLowerCase().indexOf('print') >= 0)
+                                candidates.push(comp);
+                            if (comp.components) {
+                                var keys = comp.components._idArray
+                                    || Object.keys(comp.components);
+                                if (keys && keys.length !== undefined) {
+                                    for (var i = 0; i < keys.length; i++) {
+                                        var k = keys[i];
+                                        var child = comp.components[k]
+                                            || (comp.components.getComponent
+                                                && comp.components.getComponent(k));
+                                        walk(child, depth + 1);
+                                    }
+                                }
+                            }
+                        } catch (e) {}
+                    }
+                    walk(form, 0);
+                    if (!candidates.length) {
+                        try {
+                            var top = form.components.div_top || form.div_top;
+                            var inner = top && (top.form || top);
+                            var img = inner && (inner.components
+                                && (inner.components.img_print || inner.img_print));
+                            if (img) candidates.push(img);
+                        } catch (e) {}
+                    }
+                    if (!candidates.length)
+                        return {ok: false, msg: 'print component not found'};
+                    var btn = candidates[0];
+                    if (typeof btn.click === 'function') btn.click();
+                    try {
+                        if (btn.on_fire_onclick) btn.on_fire_onclick(btn, null);
+                    } catch (e) {}
+                    return {ok: true, id: btn.id || ''};
+                } catch (e) {
+                    return {ok: false, msg: String(e)};
+                }
+            }""")
+            if not result.get("ok"):
+                log(f"  [1] 실패 — {result}")
+                return None
+            return await _after_click("1")
+        except Exception as e:
+            log(f"  [1] 예외 — {e}")
+            return None
+
+    if strategy == "locator_force":
+        log("  [2] Playwright locator.click(id, force)...")
+        try:
+            btn = edi_page.locator(f'[id="{BTN_PRINT}"]')
+            await btn.scroll_into_view_if_needed(timeout=3000)
+            await btn.click(force=True, timeout=5000)
+            return await _after_click("2")
+        except Exception as e:
+            log(f"  [2] 예외 — {e}")
+            return None
+
+    if strategy == "nexacro_viewport":
+        log("  [3] Nexacro viewport 클릭...")
+        try:
+            result = await nexacro_click_button_viewport(edi_page, BTN_PRINT)
+            if result.get("error"):
+                log(f"  [3] 실패 — {result}")
+                return None
+            return await _after_click("3")
+        except Exception as e:
+            log(f"  [3] 예외 — {e}")
+            return None
+
+    if strategy == "mouse":
+        log("  [4] 실마우스 클릭 (CSS 좌표, viewport 내만)...")
+        try:
+            geo = await _print_button_geometry(edi_page)
+            if not geo or geo.get("w", 0) < 2:
+                log(f"  [4] 버튼 비가시 — geo={geo!r}")
+                return None
+            vp = await edi_page.evaluate(
+                "() => ({iw: innerWidth, ih: innerHeight, dpr: devicePixelRatio})"
+            )
+            cx = geo["x"] + geo["w"] / 2
+            cy = geo["y"] + geo["h"] / 2
+            iw, ih = vp.get("iw", 0), vp.get("ih", 0)
+            if not (0 <= cx <= iw and 0 <= cy <= ih):
+                log(
+                    f"  [4] 스킵 — 좌표 ({cx:.0f},{cy:.0f}) 가 "
+                    f"viewport {iw}x{ih} 밖 (해상도/스크롤)"
+                )
+                return None
+            await edi_page.mouse.click(cx, cy)
+            return await _after_click("4")
+        except Exception as e:
+            log(f"  [4] 예외 — {e}")
+            return None
+
+    if strategy == "js_mouse":
+        log("  [5] JS MouseEvent 시뮬레이션...")
         try:
             result = await edi_page.evaluate(f'''() => {{
                 var btn = document.getElementById('{BTN_PRINT}');
                 if (!btn) return {{ok: false, msg: 'print btn not found'}};
                 var rect = btn.getBoundingClientRect();
-                var cx = rect.x + rect.width / 2 + (Math.random() * 4 - 2);
-                var cy = rect.y + rect.height / 2 + (Math.random() * 4 - 2);
-                var base = {{bubbles: true, cancelable: true, view: window, screenX: cx, screenY: cy, clientX: cx, clientY: cy, button: 0, buttons: 1, relatedTarget: null}};
-                btn.dispatchEvent(new MouseEvent('mousemove', {{...base, detail: 0, buttons: 0}}));
+                if (rect.width < 2 || rect.height < 2)
+                    return {{ok: false, msg: 'print btn not visible',
+                            w: rect.width, h: rect.height}};
+                var cx = rect.x + rect.width / 2;
+                var cy = rect.y + rect.height / 2;
+                var base = {{bubbles: true, cancelable: true, view: window,
+                    screenX: cx, screenY: cy, clientX: cx, clientY: cy,
+                    button: 0, buttons: 1, relatedTarget: null}};
+                btn.dispatchEvent(new MouseEvent('mousemove',
+                    {{...base, detail: 0, buttons: 0}}));
                 var t = performance.now();
                 while (performance.now() - t < 30 + Math.random() * 50) {{}}
                 btn.dispatchEvent(new MouseEvent('mousedown', {{...base, detail: 1}}));
@@ -77,32 +257,16 @@ async def _click_print_button(edi_page, context, pages_before):
                 btn.dispatchEvent(new MouseEvent('click', {{...base, detail: 1}}));
                 return {{ok: true}};
             }}''')
-            if result.get("ok"):
-                preview = await find_preview_tab(context, pages_before)
-                if preview:
-                    log("  [1] 성공 — 미리보기 탭 오픈")
-                    return preview
-                log("  [1] 클릭 ok but 미리보기 탭 미감지")
-            else:
-                log(f"  [1] 버튼 없음 — {result}")
+            if not result.get("ok"):
+                log(f"  [5] 버튼 상태 불량 — {result}")
+                return None
+            return await _after_click("5")
         except Exception as e:
-            log(f"  [1] 예외 — {e}")
+            log(f"  [5] 예외 — {e}")
+            return None
 
-        # ── 전략 2: Playwright locator.click(force=True) ──
-        log("  [2] Playwright locator.click(force=True)...")
-        try:
-            btn = edi_page.locator(f'[id="{BTN_PRINT}"]')
-            await btn.click(force=True, timeout=5000)
-            preview = await find_preview_tab(context, pages_before)
-            if preview:
-                log("  [2] 성공 — 미리보기 탭 오픈")
-                return preview
-            log("  [2] 실패 — 미리보기 탭 미감지")
-        except Exception as e:
-            log(f"  [2] 예외 — {e}")
-
-        # ── 전략 3: DOM element.focus() + element.click() ──
-        log("  [3] DOM element.click()...")
+    if strategy == "dom_click":
+        log("  [6] DOM element.click()...")
         try:
             await edi_page.evaluate(f'''() => {{
                 var el = document.getElementById('{BTN_PRINT}');
@@ -110,14 +274,50 @@ async def _click_print_button(edi_page, context, pages_before):
                 el.focus();
                 el.click();
             }}''')
-            preview = await find_preview_tab(context, pages_before)
-            if preview:
-                log("  [3] 성공 — 미리보기 탭 오픈")
-                return preview
-            log("  [3] 실패 — 미리보기 탭 미감지")
+            return await _after_click("6")
         except Exception as e:
-            log(f"  [3] 예외 — {e}")
+            log(f"  [6] 예외 — {e}")
+            return None
 
+    return None
+
+
+async def _click_print_button(edi_page, context, pages_before):
+    """인쇄 버튼 다전략 클릭. 미리보기 탭 Page 반환 또는 None.
+
+    0) 인쇄 버튼 가시 대기 (문서 상세 진입 확인)
+    1) 해상도 비의존 우선: Nexacro API → locator(id) → 그다음 좌표/합성
+    """
+    await _ensure_edi_viewport(edi_page)
+    await _log_viewport_diag(edi_page, "print")
+    # locator/nexacro 를 mouse 좌표보다 앞에 두어 DPI·창 크기 차이를 줄인다.
+    strategies = (
+        "nexacro_api",
+        "locator_force",
+        "nexacro_viewport",
+        "mouse",
+        "js_mouse",
+        "dom_click",
+    )
+    for attempt in range(PRINT_CLICK_RETRIES):
+        log(f"  인쇄 클릭 라운드 {attempt + 1}/{PRINT_CLICK_RETRIES}")
+        if not await _wait_print_button_ready(edi_page):
+            # 상세 미진입 — 호출부(download_first_doc_pdf)가 행 재선택을 함.
+            return None
+        for i, strategy in enumerate(strategies):
+            # 마지막 전략·마지막 라운드만 긴 대기 (전체 폭주 방지).
+            long_wait = (
+                attempt == PRINT_CLICK_RETRIES - 1
+                and i == len(strategies) - 1
+            )
+            preview = await _click_print_once(
+                edi_page, context, pages_before, strategy,
+                preview_timeout=(
+                    PRINT_PREVIEW_TIMEOUT_S if long_wait else 5
+                ),
+            )
+            if preview:
+                return preview
         if attempt < PRINT_CLICK_RETRIES - 1:
             log("  모든 전략 실패 — 2초 후 재시도...")
             await asyncio.sleep(2)
@@ -129,12 +329,11 @@ async def _click_print_button(edi_page, context, pages_before):
 # PDF 다운로드
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def _find_target_row(edi_page, target_yyyymm):
-    """그리드에서 YYYYMM 매칭 행 찾기 + 서식명 셀(col=3) 더블클릭
+async def _locate_target_row(edi_page, target_yyyymm):
+    """그리드에서 고지년월(YYYYMM) 매칭 행을 찾고 셀 좌표/텍스트를 반환 (클릭 없음).
 
-    매칭은 행 전체 textContent 에서 숫자만 추출(구분자 - . 년 월 일 제거)한 뒤
-    6자리 target_yyyymm(예: 202605) 가 부분문자열로 들어있는지 본다. 포털 날짜가
-    2026-05-15 / 2026.05 / 2026년05월 등 어떤 형태여도 YYYYMM 으로 정규화 매칭.
+    매칭: 행 textContent 숫자 정규화 후 target_yyyymm 부분문자열.
+    동일 년월 여러 행이면 고지차수 숫자가 있는 첫 행을 사용(목록 순서 유지).
     """
     log(f"  문서 검색 (고지년월: {target_yyyymm})...")
     result = await edi_page.evaluate("""(args) => {
@@ -142,57 +341,320 @@ async def _find_target_row(edi_page, target_yyyymm):
         if (!body) return {ok: false, msg: 'grid body not found'};
 
         var allRows = body.querySelectorAll('[id*="gridrow_"]');
-        var matchedIdx = null;
+        var candidates = [];
         for (var i = 0; i < allRows.length; i++) {
             var row = allRows[i];
             if (row.id.includes('gridrow_-1')) continue;
             if (row.id.includes('G')) continue;
-            var digits = (row.textContent || '').replace(/\\D+/g, '');
-            if (digits.indexOf(args.target) !== -1) {
-                var m = row.id.match(/gridrow_(\\d+)$/);
-                if (m) { matchedIdx = m[1]; break; }
-            }
+            var text = (row.textContent || '').replace(/\\s+/g, ' ').trim();
+            var digits = text.replace(/\\D+/g, '');
+            if (digits.indexOf(args.target) === -1) continue;
+            var m = row.id.match(/gridrow_(\\d+)$/);
+            if (!m) continue;
+            var idx = m[1];
+            // 고지차수: '고지차수' 근처 숫자 또는 행 내 단독 1~2자리 힌트
+            var chasu = null;
+            var cm = text.match(/고지차수\\s*[:：]?\\s*(\\d+)/);
+            if (cm) chasu = cm[1];
+            candidates.push({
+                rowIdx: idx,
+                text: text.substring(0, 120),
+                chasu: chasu,
+                digits: digits
+            });
         }
-        if (matchedIdx === null)
+        if (!candidates.length)
             return {ok: false, msg: 'no matching row for ' + args.target
-                    + ' (rows seen: ' + allRows.length + ')'};
+                    + ' (rows seen: ' + allRows.length + ')',
+                    rowsSeen: allRows.length};
 
+        // 목록 상위(보통 최신/1차) 우선
+        var pick = candidates[0];
         var cellId = args.gridBodyId
-            + '_gridrow_' + matchedIdx + '_cell_' + matchedIdx + '_3';
+            + '_gridrow_' + pick.rowIdx + '_cell_' + pick.rowIdx + '_3';
         var cell = document.getElementById(cellId);
         if (!cell)
             return {ok: false, msg: 'cell not found: ' + cellId};
 
+        try { cell.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
         var rect = cell.getBoundingClientRect();
-        var cx = rect.x + rect.width / 2 + (Math.random() * 4 - 2);
-        var cy = rect.y + rect.height / 2 + (Math.random() * 4 - 2);
-        var base = {bubbles: true, cancelable: true, view: window,
-            screenX: cx, screenY: cy, clientX: cx, clientY: cy,
-            button: 0, buttons: 1, relatedTarget: null};
-
-        cell.dispatchEvent(new MouseEvent('mousemove',
-            {...base, detail: 0, buttons: 0}));
-        var t = performance.now();
-        while (performance.now() - t < 30 + Math.random() * 50) {}
-        cell.dispatchEvent(new MouseEvent('mousedown', {...base, detail: 1}));
-        cell.dispatchEvent(new MouseEvent('mouseup',   {...base, detail: 1}));
-        cell.dispatchEvent(new MouseEvent('click',     {...base, detail: 1}));
-        t = performance.now();
-        while (performance.now() - t < 30 + Math.random() * 50) {}
-        cell.dispatchEvent(new MouseEvent('mousedown',  {...base, detail: 2}));
-        cell.dispatchEvent(new MouseEvent('mouseup',    {...base, detail: 2}));
-        cell.dispatchEvent(new MouseEvent('click',      {...base, detail: 2}));
-        cell.dispatchEvent(new MouseEvent('dblclick',   {...base, detail: 2}));
-        return {ok: true, rowIdx: matchedIdx,
-                text: cell.textContent.trim().substring(0, 60)};
+        return {
+            ok: true,
+            rowIdx: pick.rowIdx,
+            text: pick.text,
+            chasu: pick.chasu,
+            cellId: cellId,
+            x: rect.x, y: rect.y, w: rect.width, h: rect.height,
+            candidates: candidates.length
+        };
     }""", {"gridBodyId": GRID_BODY_ID, "target": target_yyyymm})
 
-    if not result.get("ok"):
+    if not result or not result.get("ok"):
         log(f"  ERROR: 문서 검색 실패 - {result}")
         return None
-    log(f"  문서 발견 (row {result['rowIdx']}): "
-        f"{result.get('text', '')[:60]}")
+    log(
+        f"  문서 발견 (row {result['rowIdx']}"
+        + (f", 고지차수 {result.get('chasu')}" if result.get("chasu") else "")
+        + f", 후보 {result.get('candidates', 1)}건): "
+        f"{(result.get('text') or '')[:80]}"
+    )
     return result
+
+
+async def _log_viewport_diag(edi_page, label: str = "") -> dict:
+    """해상도/DPI/뷰포트 진단 — 좌표 클릭 실패 원인 분리용."""
+    try:
+        info = await edi_page.evaluate("""() => ({
+            iw: window.innerWidth,
+            ih: window.innerHeight,
+            dpr: window.devicePixelRatio || 1,
+            sx: window.scrollX || 0,
+            sy: window.scrollY || 0,
+            ow: window.outerWidth,
+            oh: window.outerHeight
+        })""")
+        prefix = f"  [viewport{(' ' + label) if label else ''}] "
+        log(
+            f"{prefix}inner={info.get('iw')}x{info.get('ih')} "
+            f"outer={info.get('ow')}x{info.get('oh')} "
+            f"dpr={info.get('dpr')} scroll=({info.get('sx')},{info.get('sy')})"
+        )
+        return info or {}
+    except Exception as e:
+        log(f"  [viewport] 진단 실패: {e}")
+        return {}
+
+
+async def _ensure_edi_viewport(edi_page) -> None:
+    """EDI 탭 viewport 를 고정해 해상도/모니터 차이를 줄인다.
+
+    Chrome 은 --window-size=1920,1080 으로 뜨지만, OS DPI·창 배치에 따라
+    Playwright page viewport 가 달라질 수 있다. 문서 그리드/툴바 레이아웃을
+    맞추기 위해 CSS 픽셀 기준으로 맞춤.
+    """
+    try:
+        await edi_page.set_viewport_size({"width": 1920, "height": 1080})
+    except Exception:
+        pass
+    try:
+        await edi_page.bring_to_front()
+    except Exception:
+        pass
+
+
+async def _open_document_row(edi_page, row_info) -> bool:
+    """목록 행을 열어 문서 상세(인쇄 버튼 가시)로 진입.
+
+    해상도/좌표 의존을 줄이기 위해 우선순위:
+      A) Nexacro grid API (행·열 인덱스 — 좌표 불필요)
+      B) Playwright locator 더블클릭 (element id — Playwright 가 스크롤/hit 처리)
+      C) page.mouse (CSS 좌표 — viewport 안일 때만, 클릭 직전 재측정)
+      D) 합성 MouseEvent (최후 수단)
+    """
+    import random
+
+    await _ensure_edi_viewport(edi_page)
+    vp = await _log_viewport_diag(edi_page, "open-row")
+
+    row_idx = str(row_info.get("rowIdx", "0"))
+    cell_id = row_info.get("cellId") or (
+        f"{GRID_BODY_ID}_gridrow_{row_idx}_cell_{row_idx}_3"
+    )
+
+    async def _cell_geo():
+        return await edi_page.evaluate("""(cellId) => {
+            var cell = document.getElementById(cellId);
+            if (!cell) return null;
+            try { cell.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+            var r = cell.getBoundingClientRect();
+            return {
+                x: r.x, y: r.y, w: r.width, h: r.height,
+                text: (cell.textContent||'').trim().substring(0,60),
+                inView: r.bottom > 0 && r.right > 0
+                    && r.top < window.innerHeight && r.left < window.innerWidth
+                    && r.width > 1 && r.height > 1
+            };
+        }""", cell_id)
+
+    geo = await _cell_geo()
+    if not geo or geo.get("w", 0) < 2:
+        log(f"  WARN: 문서 셀 비가시 — geo={geo!r}")
+    else:
+        log(
+            f"  문서 셀 위치 {geo['w']:.0f}x{geo['h']:.0f} @ "
+            f"({geo['x']:.0f},{geo['y']:.0f}) inView={geo.get('inView')}"
+        )
+
+    # ── 전략 A: Nexacro grid API (해상도/좌표 무관) ──
+    try:
+        log("  문서 행 열기 [A] Nexacro grid API (좌표 비의존)...")
+        api = await edi_page.evaluate("""(args) => {
+            try {
+                var n = window.nexacro;
+                if (!n || !n.Application) return {ok: false, msg: 'no nexacro'};
+                var form = n.Application.mainframe.childframe.form;
+                if (!form || !form.components) return {ok: false, msg: 'no form'};
+                var body = form.components.div_body || form.div_body;
+                var bodyForm = body && (body.form || body);
+                var grid = bodyForm && (bodyForm.components
+                    && (bodyForm.components.grid_list || bodyForm.grid_list));
+                if (!grid) {
+                    function findGrid(comp, depth) {
+                        if (!comp || depth > 5) return null;
+                        try {
+                            if (comp.id && String(comp.id).indexOf('grid_list') >= 0)
+                                return comp;
+                            var cs = comp.components;
+                            if (!cs) return null;
+                            var keys = cs._idArray || Object.keys(cs);
+                            for (var i = 0; i < keys.length; i++) {
+                                var ch = cs[keys[i]] || (cs.getComponent && cs.getComponent(keys[i]));
+                                var g = findGrid(ch, depth + 1);
+                                if (g) return g;
+                            }
+                        } catch (e) {}
+                        return null;
+                    }
+                    grid = findGrid(form, 0);
+                }
+                if (!grid) return {ok: false, msg: 'grid not found'};
+                var row = parseInt(args.rowIdx, 10);
+                var col = 3;
+                try {
+                    if (typeof grid.setSelect === 'function') grid.setSelect(row, col);
+                    else if (typeof grid.selectRow === 'function') grid.selectRow(row);
+                } catch (e) {}
+                try {
+                    if (typeof grid.on_fire_oncelldblclick === 'function') {
+                        grid.on_fire_oncelldblclick(grid, {row: row, cell: col, col: col});
+                        return {ok: true, via: 'on_fire_oncelldblclick'};
+                    }
+                } catch (e1) {}
+                try {
+                    if (grid.oncelldblclick && typeof grid.oncelldblclick._fireEvent === 'function') {
+                        grid.oncelldblclick._fireEvent(grid, {row: row, cell: col});
+                        return {ok: true, via: 'oncelldblclick._fireEvent'};
+                    }
+                } catch (e2) {}
+                try {
+                    if (typeof grid.callEvent === 'function') {
+                        grid.callEvent('oncelldblclick', [row, col]);
+                        return {ok: true, via: 'callEvent'};
+                    }
+                } catch (e3) {}
+                return {ok: false, msg: 'no dblclick API on grid'};
+            } catch (e) {
+                return {ok: false, msg: String(e)};
+            }
+        }""", {"rowIdx": row_idx})
+        log(f"  [A] Nexacro 결과: {api}")
+        if api and api.get("ok"):
+            if await _wait_print_button_ready(edi_page, timeout_s=8):
+                log("  문서 상세 진입 성공 (Nexacro API — 해상도 비의존)")
+                return True
+    except Exception as e:
+        log(f"  [A] Nexacro 예외 — {e}")
+
+    # ── 전략 B: Playwright locator (id 기반 — 좌표 수동 계산 없음) ──
+    try:
+        log("  문서 행 열기 [B] locator.dblclick(id)...")
+        loc = edi_page.locator(f'[id="{cell_id}"]')
+        await loc.scroll_into_view_if_needed(timeout=5000)
+        # force=True: Nexacro 오버레이/opacity 에도 동작, 해상도별 hit-test 완화
+        await loc.dblclick(timeout=5000, force=True)
+        if await _wait_print_button_ready(edi_page, timeout_s=8):
+            log("  문서 상세 진입 성공 (locator — id 기반)")
+            return True
+    except Exception as e:
+        log(f"  [B] locator 예외 — {e}")
+
+    # ── 전략 C: page.mouse (CSS 좌표 — viewport 안일 때만) ──
+    # getBoundingClientRect 와 Playwright mouse 는 모두 CSS 픽셀.
+    # 단, 요소가 viewport 밖이거나 w/h=0 이면 해상도/스크롤 문제로 실패한다.
+    geo = await _cell_geo()
+    if geo and geo.get("inView") and geo.get("w", 0) >= 2 and geo.get("h", 0) >= 2:
+        iw = float(vp.get("iw") or 0) or 9999
+        ih = float(vp.get("ih") or 0) or 9999
+        cx = geo["x"] + geo["w"] / 2
+        cy = geo["y"] + geo["h"] / 2
+        if 0 <= cx <= iw and 0 <= cy <= ih:
+            try:
+                log(
+                    f"  문서 행 열기 [C] page.mouse.dblclick "
+                    f"@({cx:.0f},{cy:.0f}) vp={iw:.0f}x{ih:.0f} dpr={vp.get('dpr')}..."
+                )
+                await edi_page.mouse.click(cx + random.uniform(-1, 1),
+                                           cy + random.uniform(-1, 1))
+                await asyncio.sleep(0.12)
+                await edi_page.mouse.dblclick(cx, cy)
+                if await _wait_print_button_ready(edi_page, timeout_s=8):
+                    log("  문서 상세 진입 성공 (실마우스 CSS 좌표)")
+                    return True
+            except Exception as e:
+                log(f"  [C] 실마우스 예외 — {e}")
+        else:
+            log(
+                f"  [C] 스킵 — 셀 중심 ({cx:.0f},{cy:.0f}) 이 "
+                f"viewport {iw:.0f}x{ih:.0f} 밖 (해상도/스크롤 이슈 가능)"
+            )
+    else:
+        log(f"  [C] 스킵 — 셀 inView/크기 부족 geo={geo!r}")
+
+    # ── 전략 D: 합성 MouseEvent (최후) ──
+    try:
+        log("  문서 행 열기 [D] 합성 dblclick...")
+        syn = await edi_page.evaluate("""(cellId) => {
+            var cell = document.getElementById(cellId);
+            if (!cell) return {ok: false, msg: 'cell missing'};
+            try { cell.scrollIntoView({block: 'center'}); } catch (e) {}
+            var rect = cell.getBoundingClientRect();
+            var cx = rect.x + rect.width / 2;
+            var cy = rect.y + rect.height / 2;
+            var base = {bubbles: true, cancelable: true, view: window,
+                screenX: cx, screenY: cy, clientX: cx, clientY: cy,
+                button: 0, buttons: 1, relatedTarget: null};
+            cell.dispatchEvent(new MouseEvent('mousemove', {...base, detail: 0, buttons: 0}));
+            var t = performance.now();
+            while (performance.now() - t < 40) {}
+            cell.dispatchEvent(new MouseEvent('mousedown', {...base, detail: 1}));
+            cell.dispatchEvent(new MouseEvent('mouseup', {...base, detail: 1}));
+            cell.dispatchEvent(new MouseEvent('click', {...base, detail: 1}));
+            t = performance.now();
+            while (performance.now() - t < 40) {}
+            cell.dispatchEvent(new MouseEvent('mousedown', {...base, detail: 2}));
+            cell.dispatchEvent(new MouseEvent('mouseup', {...base, detail: 2}));
+            cell.dispatchEvent(new MouseEvent('click', {...base, detail: 2}));
+            cell.dispatchEvent(new MouseEvent('dblclick', {...base, detail: 2}));
+            return {ok: true, w: rect.width, h: rect.height,
+                    inView: rect.bottom > 0 && rect.top < window.innerHeight};
+        }""", cell_id)
+        log(f"  [D] 합성 결과: {syn}")
+        if await _wait_print_button_ready(edi_page, timeout_s=8):
+            log("  문서 상세 진입 성공 (합성 이벤트)")
+            return True
+    except Exception as e:
+        log(f"  [D] 합성 예외 — {e}")
+
+    log(
+        "  ERROR: 문서 행 더블클릭으로 상세 진입 실패 "
+        "(인쇄 버튼 계속 숨김). viewport/DPI 로그 위 참고."
+    )
+    return False
+
+
+async def _find_target_row(edi_page, target_yyyymm):
+    """그리드에서 YYYYMM 매칭 행 찾기 + 상세 진입까지 수행.
+
+    Returns:
+        row_info dict (상세 진입 성공 시) 또는 None
+    """
+    info = await _locate_target_row(edi_page, target_yyyymm)
+    if not info:
+        return None
+    opened = await _open_document_row(edi_page, info)
+    if not opened:
+        return None
+    return info
 
 
 async def _setup_crownix_download(context, preview, save_dir):
@@ -335,18 +797,44 @@ async def download_first_doc_pdf(edi_page, context, save_dir, firm_name,
     # YYYYMM 타겟 계산 (None → 당월 폴백)
     _y, _m, target_yyyymm = _resolve_period(year, month)
 
-    # 그리드에서 YYYYMM 매칭 행 찾기 + 더블클릭
-    result = await _find_target_row(edi_page, target_yyyymm)
-    if not result:
-        return None
-    await human_delay(3)
+    try:
+        await edi_page.bring_to_front()
+    except Exception:
+        pass
 
-    # ── 인쇄 버튼 클릭 (3전략) ──
-    pages_before = set(id(pg) for pg in context.pages)
-    log("  인쇄 버튼 클릭 (3전략)...")
-    preview = await _click_print_button(edi_page, context, pages_before)
+    # 그리드에서 YYYYMM(+고지차수 목록) 매칭 → 상세 진입(실마우스/Nexacro/합성)
+    # → 인쇄. 병렬 Chrome 에서 합성 dblclick no-op 이 주원인.
+    preview = None
+    for open_try in range(3):
+        try:
+            await edi_page.bring_to_front()
+        except Exception:
+            pass
+        result = await _find_target_row(edi_page, target_yyyymm)
+        if not result:
+            log(
+                f"  문서 상세 미진입 (시도 {open_try + 1}/3) "
+                "— 행 재검색/재더블클릭"
+            )
+            await asyncio.sleep(1)
+            continue
+        # _find_target_row 성공 시 이미 인쇄 버튼 가시
+        pages_before = set(id(pg) for pg in context.pages)
+        log("  인쇄 버튼 클릭 (다전략)...")
+        preview = await _click_print_button(edi_page, context, pages_before)
+        if preview:
+            break
+        log(
+            f"  인쇄 클릭 실패 (문서 오픈 시도 {open_try + 1}/3) "
+            "— 행 재선택 후 재시도"
+        )
+        await asyncio.sleep(1)
+
     if not preview:
-        log("  ERROR: 미리보기 탭을 찾지 못했습니다 (3전략 × 3회 시도).")
+        log(
+            "  ERROR: 미리보기 탭을 찾지 못했습니다 "
+            "(문서 상세 진입 + 인쇄 다전략 실패)."
+        )
         return None
     log("  미리보기 탭 열림")
 

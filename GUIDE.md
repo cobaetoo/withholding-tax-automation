@@ -34,7 +34,7 @@
 | Phase | 포털 | 기능 | 상태 |
 |-------|------|------|------|
 | 1 | WEHAGO | 수임처 리스트 확보 | 완료 |
-| 2 | (병렬) | 공단 EDI 병렬 자동화 (NPS+NHIS+고용보험) | 완료 |
+| 2 | (병렬) | 공단 EDI 병렬 자동화 (NPS+NHIS+고용보험) | 완료 (v1.1.4 라이브 1~2건 검증) |
 | 3 | 국민건강보험 EDI | 결정내역 PDF/Excel 다운로드 | 완료 |
 | 4 | 국민연금 EDI | 결정내역 PDF/Excel 다운로드 | 완료 |
 | 5 | 고용보험 EDI | 고용보험료 지원금 정보 인쇄물 다운로드 | 완료 |
@@ -605,8 +605,10 @@ python build.py
 | WEHAGO SPA에 `domcontentloaded` 사용 | `networkidle` 대기 시 WEHAGO가 항상 네트워크 연결을 유지하여 30초 타임아웃 발생. |
 | Nexacro에 dispatchEvent 사용 | 일반 DOM click을 Nexacro가 무시함. mousedown→mouseup→click 순차 이벤트 필요. |
 | 직렬 9223·병렬 EDI 포트/프로필 분리 | 직렬 경로는 9223 재사용을 보존하고, 병렬 EDI는 9223/9224/9225로 보안모듈·탭·다운로드를 격리. |
+| 병렬 NHIS 문서 열기: Nexacro/locator 우선 | 합성 dblclick·절대 좌표만 쓰면 백그라운드 Chrome·DPI 에서 상세 미진입. 행·열/id 기반 우선(v1.1.4 §18). |
+| GUI 기동 `run_gui.bat` | 탐색기 더블클릭 권장. IDE/에이전트 Job 에 묶인 pythonw 는 세션 종료 시 강제 킬될 수 있음. 진단: `logs/lifecycle.log`. |
 | 수동 로그인 방식 | 공동인증서/보안모듈 자동화의 법적/기술적 리스크 회피. |
-| QThread + asyncio 분리 | Playwright(asyncio)와 Qt 이벤트루프를 직접 섞을 수 없음. |
+| QThread + asyncio 분리 | Playwright(asyncio)와 Qt 이벤트루프를 직접 섞을 수 없음. 병렬 CLI stdout 은 queue→QThread drain 만 Signal emit. |
 | 사업장관리번호로 수임처 검색 | 동명 수임처 구분 및 정확한 매칭. 사업자등록번호에서 `-` 제거 후 `0` 추가. |
 | 단건 실행에 NoopStateManager 사용 | BatchEngine 오버헤드 없이 단일 수임처 즉시 실행. DB 기록이 없으므로 fail_step 사유는 log()로 방출해 GUI 로그 패널에 표시(2026-07-17). |
 

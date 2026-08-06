@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QTextEdit, QLineEdit, QLabel,
 )
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, QTimer
 from PySide6.QtGui import QTextCursor
 
 
@@ -13,14 +13,23 @@ class LogPanel(QWidget):
 
     자동화 모듈의 print() 출력을 캡처하여 표시.
     필터 입력으로 특정 키워드만 볼 수 있음.
+
+    병렬 CLI 로그 폭주 시 매 줄 insertPlainText 가 이벤트 루프를 막지 않도록
+    짧은 배치 플러시(기본 50ms)로 묶는다.
     """
 
     MAX_LINES = 5000
+    FLUSH_MS = 50
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._filter_text = ""
         self._all_lines: list[str] = []
+        self._pending: list[str] = []
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setSingleShot(True)
+        self._flush_timer.setInterval(self.FLUSH_MS)
+        self._flush_timer.timeout.connect(self._flush_pending)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -62,7 +71,20 @@ class LogPanel(QWidget):
         if self._filter_text and self._filter_text.lower() not in message.lower():
             return
 
-        self._append_line(message)
+        self._pending.append(message)
+        if not self._flush_timer.isActive():
+            self._flush_timer.start()
+
+    def _flush_pending(self):
+        if not self._pending:
+            return
+        chunk = "\n".join(self._pending) + "\n"
+        self._pending.clear()
+        self.text_edit.moveCursor(QTextCursor.End)
+        self.text_edit.insertPlainText(chunk)
+        sb = self.text_edit.verticalScrollBar()
+        if sb.value() >= sb.maximum() - 20:
+            sb.setValue(sb.maximum())
 
     def _append_line(self, text: str):
         self.text_edit.moveCursor(QTextCursor.End)
@@ -74,6 +96,7 @@ class LogPanel(QWidget):
             sb.setValue(sb.maximum())
 
     def _apply_filter(self, text: str):
+        self._flush_pending()
         self._filter_text = text.strip()
         self.text_edit.clear()
         for line in self._all_lines:

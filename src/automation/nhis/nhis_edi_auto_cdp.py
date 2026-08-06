@@ -268,15 +268,48 @@ def _name_match(a: str, b: str) -> bool:
 
 
 async def _current_firm_name(page):
-    """메인 페이지에 현재 표시된 수임 사업자명 반환 (사업장 전환 검증용)."""
+    """메인 페이지에 현재 표시된 수임 사업자명 반환 (사업장 전환 검증용).
+
+    전환 직후 DOM 이 비어 있거나 표기 라벨이 다를 수 있어 여러 패턴을 시도한다.
+    """
     try:
         return await page.evaluate(r"""() => {
-            var t = document.body.innerText || "";
-            var m = t.match(/수임\s*사업자명\s*:?\s*([^\n]+)/);
-            return m ? m[1].trim() : null;
+            var t = document.body ? (document.body.innerText || "") : "";
+            var patterns = [
+                /수임\s*사업자명\s*:?\s*([^\n\r]+)/,
+                /사업자명\s*:?\s*([^\n\r]+)/,
+                /수임처\s*:?\s*([^\n\r]+)/,
+            ];
+            for (var i = 0; i < patterns.length; i++) {
+                var m = t.match(patterns[i]);
+                if (m) {
+                    var name = m[1].trim();
+                    // 너무 긴 줄(본문 잡음) 제외
+                    if (name && name.length < 80) return name;
+                }
+            }
+            // 버튼/이미지 alt 등
+            var img = document.querySelector('img[alt*="수임"]');
+            if (img && img.alt) return img.alt.trim();
+            return null;
         }""")
     except Exception:
         return None
+
+
+async def _wait_firm_switched(page, firm_name: str, timeout_s: int = 12) -> tuple[bool, str | None]:
+    """사업장 전환 반영 대기. (matched, current_name)."""
+    cur = None
+    for i in range(timeout_s):
+        try:
+            await page.bring_to_front()
+        except Exception:
+            pass
+        cur = await _current_firm_name(page)
+        if cur and _name_match(cur, firm_name):
+            return True, cur
+        await asyncio.sleep(1)
+    return False, cur
 
 
 from src.automation._parallel_report import (
@@ -353,20 +386,28 @@ async def run_auto_batch(page, context, *, firms, year, month, mgmts=None):
                 skipped.append({"name": firm_name, "reason": "미발견"})
                 continue
 
-            # 사업장 전환 검증 — select_firm 이 클릭했더라도 9224 백그라운드 Chrome
-            # 에서 click 이 실제 전환을 일으키지 않으면 페이지가 기본 사업장에 머문다.
-            # 이 경우 run_single_firm_workflow 가 의도한 수임처가 아닌 자료를 가져온다.
-            cur = await _current_firm_name(main_page)
-            matched = bool(cur and _name_match(cur, firm_name))
+            # 전환 직후 메인 탭 전면화 + 표시명 폴링 (page='None' 오판 방지)
+            try:
+                await main_page.bring_to_front()
+            except Exception:
+                pass
+            await human_delay(2)
+            matched, cur = await _wait_firm_switched(main_page, firm_name, timeout_s=12)
             log(f"  전환 검증: 페이지='{cur}' / 기대='{firm_name}' "
                 f"{'OK' if matched else 'MISMATCH'}")
             _trace(f"[{i}/{len(targets)}] target='{firm_name}' mgmt='{mgmt}' "
                    f"-> page='{cur}' {'OK' if matched else 'MISMATCH'}")
             if not matched:
+                # 한 번 더: 메인 재해석 후 재검증 (탭 전환으로 메인 유실 대비)
+                main_page = await close_popups(context) or main_page
+                matched, cur = await _wait_firm_switched(main_page, firm_name, timeout_s=6)
+                log(f"  전환 재검증: 페이지='{cur}' / 기대='{firm_name}' "
+                    f"{'OK' if matched else 'MISMATCH'}")
+            if not matched:
                 log(f"  WARN: '{firm_name}' 전환 미반영 — 페이지='{cur}'. "
                     f"워크플로우 진행하지만 자료가 다를 수 있음.")
 
-            await human_delay(3)
+            await human_delay(2)
             ok = await run_single_firm_workflow(main_page, context, firm_name,
                                                 year=year, month=month)
             if ok:
@@ -448,14 +489,48 @@ async def main(args=None):
         except Exception:
             pass
 
+        # bootstrap/첫 실행: homeapp 만 열린 채 retrieveMain 이 없으면 강제 이동.
+        # 로그인 감지(homeapp URL)와 firm-selector 게이트(수임버튼 DOM) 사이의
+        # 갭을 메워 ready 마커 미기록 → 고용보험 미오픈 연쇄를 막는다.
+        try:
+            if "retrieveMain" not in (page.url or ""):
+                log("  메인(retrieveMain)으로 이동...")
+                await page.goto(
+                    NHIS_EDI_MAIN, wait_until="domcontentloaded", timeout=60000,
+                )
+                await asyncio.sleep(1)
+                page = await close_popups(context, preferred_page=page) or page
+                try:
+                    await page.bring_to_front()
+                except Exception:
+                    pass
+        except Exception as e:
+            log(f"  WARN: retrieveMain 이동 실패 — 현재 탭으로 계속: {e}")
+
         # 로그인 직후 retrieveMain 리다이렉트/렌더가 끝나 수임사업장선택 버튼이
         # 뜰 때까지 한 번 안정화. (안 하면 첫 1~2 수임처가 'context destroyed'/
         # 버튼 미발견으로 실패하고 안정된 뒤 건만 성공.)
         log("  메인 페이지 준비 대기...")
-        main_ready = await wait_firm_selector_ready(page, context)
+        # bootstrap 은 최초 프로필·throttle 을 고려해 더 길게 대기.
+        _ready_timeout = 120 if getattr(args, "bootstrap_only", False) else 90
+        main_ready = await wait_firm_selector_ready(
+            page, context, timeout_s=_ready_timeout,
+        )
         if getattr(args, "bootstrap_only", False):
             if not main_ready:
-                log("ERROR: 최초 준비 실패 — 건강보험 메인 화면이 완전히 열리지 않았습니다.")
+                try:
+                    tab_urls = []
+                    for pg in context.pages:
+                        try:
+                            tab_urls.append(pg.url or "?")
+                        except Exception:
+                            tab_urls.append("<unreadable>")
+                    log(
+                        "ERROR: 최초 준비 실패 — 건강보험 메인 화면이 완전히 열리지 않았습니다. "
+                        f"tabs={tab_urls!r}"
+                    )
+                except Exception:
+                    log("ERROR: 최초 준비 실패 — 건강보험 메인 화면이 완전히 열리지 않았습니다.")
                 return False
             try:
                 mark_parallel_profile_ready(CDP_PORT, "nhis")
@@ -463,7 +538,7 @@ async def main(args=None):
                 log(f"ERROR: 최초 준비 상태를 저장하지 못했습니다: {e}")
                 return False
             emit_bootstrap_ready()
-            log("최초 보안/로그인 준비 완료. 다음 기관 준비를 진행합니다.")
+            log("최초 보안/로그인 준비 완료. Chrome 은 유지되며 다음 기관 준비를 진행합니다.")
             return True
         if main_ready:
             log("  메인 페이지 준비 완료")

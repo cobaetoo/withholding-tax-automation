@@ -38,17 +38,30 @@ def _create_single_instance_mutex():
     Inno Setup이 업그레이드/제거 시 실행 중인 인스턴스를 감지해
     파일 잠금 충돌(반쪽 덮어쓰기)을 막을 수 있게 한다.
     핸들은 프로세스 종료 시 자동 해제되도록 일부러 닫지 않는다.
+
+    Returns:
+        True  if this process owns a new mutex (or non-Windows / failure → allow run)
+        False if another instance already holds the mutex (ERROR_ALREADY_EXISTS)
     """
     global _MUTEX_HANDLE
     if sys.platform != "win32":
-        return
+        return True
     try:
         import ctypes
-        _MUTEX_HANDLE = ctypes.windll.kernel32.CreateMutexW(
+        kernel32 = ctypes.windll.kernel32
+        # CreateMutex 직전 LastError 초기화 (이전 API 잔여 183 오인 방지)
+        kernel32.SetLastError(0)
+        _MUTEX_HANDLE = kernel32.CreateMutexW(
             None, False, "WithholdingTaxAutomation_SingleInstance"
         )
+        if not _MUTEX_HANDLE:
+            return True  # 생성 실패 시 실행은 허용
+        # ERROR_ALREADY_EXISTS = 183 → 다른 인스턴스가 이미 보유
+        if kernel32.GetLastError() == 183:
+            return False
+        return True
     except Exception:
-        pass
+        return True
 
 
 def _apply_light_palette(app):
@@ -424,7 +437,32 @@ def main():
 
     sys.path.insert(0, resource_path("."))
 
-    _create_single_instance_mutex()
+    # 종료 원인 진단 로그 (traceback 없는 kill 도 heartbeat 단절로 판별)
+    try:
+        from src.utils.lifecycle_log import log_app_start, log_event, install_qt_message_handler
+        log_app_start()
+    except Exception:
+        log_event = None  # type: ignore
+        install_qt_message_handler = None  # type: ignore
+
+    owned_mutex = _create_single_instance_mutex()
+    if not owned_mutex:
+        # 두 번째 실행: 조용히 종료(사용자는 “켰다 바로 꺼짐”으로 오인). 안내 후 exit.
+        try:
+            if log_event:
+                log_event("app.duplicate_instance")
+        except Exception:
+            pass
+        try:
+            from PySide6.QtWidgets import QApplication, QMessageBox
+            app = QApplication(sys.argv)
+            QMessageBox.information(
+                None, "원천징수 자동화",
+                "이미 실행 중입니다.\n작업 표시줄에서 기존 창을 확인해 주세요.",
+            )
+        except Exception:
+            pass
+        sys.exit(0)
 
     from PySide6.QtWidgets import QApplication
     from src.ui.main_window import MainWindow
@@ -439,6 +477,11 @@ def main():
     app.setApplicationVersion(__version__)
     app.setStyle("Fusion")
     _apply_light_palette(app)  # 다크 모드 대비 — 라이트 팔레트 강제
+    try:
+        if install_qt_message_handler:
+            install_qt_message_handler()
+    except Exception:
+        pass
 
     # 스타일시트 로드 (QWidget 배경 포함 — 다크모드 검정 배경 방어)
     qss_path = resource_path(os.path.join("src", "ui", "resources", "style.qss"))
@@ -463,6 +506,11 @@ def main():
     # 1) 베타 만료 확인
     if is_beta_expired():
         # 종료 전에 업데이트 설치 기회를 제공 (안내만 하고 끝나면 예전과 동일).
+        try:
+            if log_event:
+                log_event("quit.path", reason="beta_expired")
+        except Exception:
+            pass
         _run_expiry_update_gate()
         sys.exit(1)
 
@@ -474,13 +522,29 @@ def main():
         from src.ui.widgets.login_dialog import LoginDialog
         login_dlg = LoginDialog()
         if login_dlg.exec() != QDialog.Accepted:
+            try:
+                if log_event:
+                    log_event("quit.path", reason="login_cancelled")
+            except Exception:
+                pass
             sys.exit(0)
 
     # ── 메인 윈도우 ────────────────────────────────────────────────────
     window = MainWindow()
     window.show()
+    try:
+        if log_event:
+            log_event("app.main_window_shown")
+    except Exception:
+        pass
 
-    sys.exit(app.exec())
+    code = app.exec()
+    try:
+        if log_event:
+            log_event("app.exec_return", code=code)
+    except Exception:
+        pass
+    sys.exit(code)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
 >
 > **작성 시점:** 2026-06-23. feasibility 평가 완료(코드 구현 전). 서브에이전트 3개(브라우저/CDP·페이지 선택 / 스레드·async·GUI / 데이터·다운로드·세션) 병렬 조사 기반.
 >
-> **현재 상태(2026-08-06):** 3-way child CLI 병렬 실행 구현 완료. 신규 프로필은 순차 bootstrap 후 실제 업무만 병렬 실행하며, 자동 회귀와 보호 빌드를 통과했다. 실제 새 설치 환경의 보안모듈 스모크는 아직 대기다(§17).
+> **현재 상태(2026-08-06, v1.1.4):** 3-way child CLI 병렬 실행 + 최초 bootstrap 순차 준비(§17) + NHIS 문서 상세 진입/인쇄 안정화·GUI lifecycle 진단·병렬 로그 스레드 안전화(§18). 선택건 1~2건 라이브 검증에서 NPS·NHIS·고용보험 다운로드 성공.
 >
 > **역사적 범위:** §0~§8은 2026-06-23의 구현 전 feasibility 기록이다. 현재 동작과 인수인계는 **§17** 및 [최초 실행 조사 기록](parallel-first-run-investigation.md)을 우선한다.
 
@@ -566,3 +566,42 @@ CDP 포트가 열린 시점만 성공으로 판단해, 포털 보안모듈·공�
 - 실제 새 Windows 사용자 또는 VM에서 단일 수임처로 첫 병렬 실행을 확인해야 한다.
   세 기관의 준비가 순차로 끝난 뒤에만 실제 수임처 업무가 동시에 시작되어야 한다.
   상세 증상·검증 기록은 [최초 실행 조사 기록](parallel-first-run-investigation.md)을 참조.
+
+## 18. NHIS 상세 진입·GUI 안정화 + lifecycle 진단 (2026-08-06, v1.1.4)
+
+### 18.1 증상 (라이브)
+
+- 공단 EDI 병렬에서 국민연금·고용보험은 정상, **건강보험만 PDF 0건**.
+- 로그: 고지년월 행은 찾음 → 인쇄 버튼 `display:none` / 0×0 → 미리보기 탭 미감지.
+- 부가: 사업장 전환 검증 `페이지='None'`, 완료 후/실행 중 GUI 가 갑자기 종료되는 경우.
+
+### 18.2 원인
+
+1. **문서 행 더블클릭 no-op** — 합성 `MouseEvent` 위주. 병렬 백그라운드 Chrome·Nexacro 에서
+   상세 폼이 안 열려 인쇄 툴바가 숨김 상태 유지.
+2. **좌표/해상도 민감** — `getBoundingClientRect` + `page.mouse` 가 viewport 밖·DPI 에서 실패 가능.
+   행 **검색** 자체는 id/텍스트 기반이라 해상도와 무관.
+3. **전환 검증 조기 판독** — 선택 직후 DOM 에 수임 사업자명이 없어 `None` MISMATCH.
+4. **GUI 종료** — (a) 완료 팝업 × QThread 종료 레이스, (b) plain `threading.Thread` 에서 Qt Signal
+   대량 emit, (c) 에이전트 Job Object 에 묶인 기동 시 세션 종료와 동반 킬.
+
+### 18.3 수정 요약
+
+| 영역 | 변경 |
+|------|------|
+| NHIS 문서 열기 | Nexacro API → `locator(id)` → mouse(뷰포트 내) → 합성 순. 인쇄 버튼 가시까지 대기 |
+| 인쇄/미리보기 | 동일 우선순위, 미리보기 URL 판정 완화, 타임아웃 여유 |
+| viewport | 웹EDI 탭 `set_viewport_size(1920,1080)` + 진단 로그(dpr/inner) |
+| 사업장 전환 | 표시명 폴링·패턴 확장·재검증 |
+| NHIS bootstrap | `retrieveMain` 우선, firm-selector 대기 강화 |
+| COMWEL | EDI ready 타임아웃 분리(40s), 멀티탭 로그인 |
+| 병렬 로그 | reader → queue → QThread `drain_events` 만 Signal emit |
+| 완료 UX | QueuedConnection + 리포트 deferred, 실행 중 close 확인 |
+| 진단 | `src/utils/lifecycle_log.py` → `logs/lifecycle.log` (heartbeat/closeEvent/quit) |
+| 기동 | `run_gui.bat`(영문 이름) + 단일 인스턴스 안내 |
+
+### 18.4 검증
+
+- pytest 전체 통과 (lifecycle / parallel bootstrap / NHIS preview URL 포함).
+- **라이브:** 선택건 1건·2건 병렬에서 건강보험 PDF 포함 3기관 자료 정상 다운로드 확인(2026-08-06).
+- GUI 는 탐색기에서 `run_gui.bat` 더블클릭 권장(에이전트/IDE Job 기동 시 강제 종료 가능).

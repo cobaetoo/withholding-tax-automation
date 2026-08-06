@@ -15,36 +15,86 @@ from src.utils.human import human_delay
 from src.automation.nhis._constants import FIRM_LIST_URL
 
 
-async def wait_firm_selector_ready(page, context, timeout_s=40):
+async def wait_firm_selector_ready(page, context, timeout_s=90):
     """로그인 직후 retrieveMain 이 리다이렉트·렌더를 끝내고 수임사업장선택
     버튼이 나타날 때까지 대기.
 
     로그인 직후 첫 수임처에서 (a) 버튼이 아직 안 떠 '못 찾음' (b) 폴링 중
     네비게이션으로 'context destroyed' 가 났다(첫 1~2건만 실패하고 안정된
     뒤 건은 성공한 원인). 첫 건 처리 전에 페이지를 한 번 안정화시킨다.
-    네비게이션 중 evaluate 예외는 무시하고 재시도하며, retrieveMain 탭을
-    매번 재해석한다.
+    네비게이션 중 evaluate 예외는 무시하고 재시도하며, retrieveMain/homeapp
+    탭을 매번 재해석한다.
+
+    기본 타임아웃 90초 — 최초 병렬 프로필·백그라운드 throttle 에서 40초로는
+    버튼 paint 전 bootstrap hard-fail 이 났다.
     """
-    for _ in range(timeout_s * 2):
-        target = page
+    _SUIM_JS = """() => {
+        const img = document.querySelector('img[src*="we_btn_suim"]')
+                 || document.querySelector('img[alt*="수임사업장선택"]');
+        return !!img;
+    }"""
+
+    def _pick_target():
+        """retrieveMain 우선, 없으면 homeapp, 마지막에 전달 page."""
+        homeapp = None
         for pg in context.pages:
             try:
-                if "retrieveMain" in pg.url:
-                    target = pg
-                    break
+                url = pg.url or ""
+                if "retrieveMain" in url:
+                    return pg
+                if homeapp is None and "homeapp" in url:
+                    homeapp = pg
             except Exception:
                 continue
+        if homeapp is not None:
+            return homeapp
+        return page
+
+    iterations = max(1, int(timeout_s * 2))
+    for i in range(iterations):
+        target = _pick_target()
+        # 백그라운드 창 throttle 완화 — 주기적으로 전면화해 렌더를 촉진.
+        if i % 4 == 0:
+            try:
+                if target is not None and not target.is_closed():
+                    await target.bring_to_front()
+            except Exception:
+                pass
         try:
-            found = await target.evaluate("""() => {
-                const img = document.querySelector('img[src*="we_btn_suim"]')
-                         || document.querySelector('img[alt*="수임사업장선택"]');
-                return !!img;
-            }""")
-            if found:
-                return True
+            if target is not None and not target.is_closed():
+                found = await target.evaluate(_SUIM_JS)
+                if found:
+                    return True
         except Exception:
             pass
+        # 다른 EDI 탭에도 버튼이 있을 수 있음(메인 탭 잘못 고른 경우).
+        for pg in list(context.pages):
+            if pg is target:
+                continue
+            try:
+                url = pg.url or ""
+                if "edi.nhis.or.kr" not in url:
+                    continue
+                if await pg.evaluate(_SUIM_JS):
+                    return True
+            except Exception:
+                continue
         await asyncio.sleep(0.5)
+
+    # 실패 진단 — bootstrap 로그에서 원인 분리 (URL/탭/버튼).
+    try:
+        urls = []
+        for pg in context.pages:
+            try:
+                urls.append(pg.url or "?")
+            except Exception:
+                urls.append("<unreadable>")
+        log(
+            f"  wait_firm_selector_ready 실패 ({timeout_s}s): "
+            f"tabs={len(urls)} urls={urls!r}"
+        )
+    except Exception:
+        log(f"  wait_firm_selector_ready 실패 ({timeout_s}s)")
     return False
 
 
