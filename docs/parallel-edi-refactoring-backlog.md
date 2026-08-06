@@ -7,10 +7,11 @@
 | 항목 | 값 |
 |------|-----|
 | **작성일** | 2026-08-06 |
+| **재검증** | 2026-08-07 — 코드 대조 후 문구 정밀화. **항목 폐기/신규 없음** (전면 수정 불필요) |
 | **기준 버전** | `1.1.4` (`src/version.py`) |
 | **기준 커밋** | `deb0791` (`fix(parallel): stabilize NHIS download and GUI lifecycle…`) |
-| **조사** | 전문 서브에이전트 2종(병렬 CLI/GUI · NHIS/포털) + 코드 교차 확인 |
-| **관련 문서** | [parallel-automation-handoff.md](parallel-automation-handoff.md) §17–§18 · [TECH_DEBT.md](TECH_DEBT.md) TD-06/TD-07 |
+| **조사** | 전문 서브에이전트 2종(병렬 CLI/GUI · NHIS/포털) + 코드 교차 확인 (초안·재검증 동일 방식) |
+| **관련 문서** | [parallel-automation-handoff.md](parallel-automation-handoff.md) §17–§18 · [TECH_DEBT.md](TECH_DEBT.md) TD-06/TD-07/TD-19 |
 
 ---
 
@@ -72,12 +73,12 @@ CLI (nps_auto_cdp / nhis_edi_auto_cdp / comwel_auto_cdp)
 
 | ID | 문제 | 왜 | 접근 | 노력 | 위험 |
 |----|------|-----|------|------|------|
-| **PE-P0-1** | `ParallelCliRunner.start()` 가 `is_running` 시 `RuntimeError`; UI try/except 없음 | 슬롯 미처리 예외 → 앱 이상 종료 체감 | UI 가드 + statusBar; 또는 start → bool | S | 낮음 |
-| **PE-P0-2** | 병렬 정지 시 UI 가 `all_finished` 에만 의존해 unlock | join/cleanup 지연 시 “정지” 고정 | stop 직후 메시지 + 8–10s watchdog | S–M | 중 |
-| **PE-P0-3** | MainWindow 병렬 라이프사이클 자동 테스트 부재 | deferred modal / closeEvent 회귀 | offscreen Qt 로 시그널·모달·close 계약 | M | 낮음 |
-| **PE-P0-4** | 받은문서 **fallback** 경로 viewport 미설정 | 주 경로만 1920×1080 | 공유 `_ensure_edi_viewport` | S | 낮음 |
-| **PE-P0-5** | firm 전환 2차 MISMATCH 후에도 워크플로우 진행 | 잘못된 수임처 PDF | 제품 결정: skip `전환실패` 또는 1회 재선택 | S | 중 |
-| **PE-P0-6** | 행 상세 대기 `timeout_s=8` vs 상수 20 불일치 | 느린 병렬 페인트 false fail | `ROW_DETAIL_READY_TIMEOUT_S` 상수화 | S | 낮–중 |
+| **PE-P0-1** | `start()` 가 `is_running` 시 `RuntimeError`; UI `try/except` 없음 | `_on_start`/`_on_selected_run` 에 pre-check 는 있으나, `set_running(True)` 가 `start()` **앞** → 레이스 시 예외 + 테이블 잠금 잔존 가능 | start 직전 재검사 + try/except·statusBar; 또는 start → bool | S | 낮음 |
+| **PE-P0-2** | 병렬 정지 시 UI 가 `all_finished` 에만 의존해 unlock | `_on_stop` 은 `stop()` 만; unlock 은 `_on_parallel_finished` 단일 | stop 직후 메시지 + 8–10s watchdog | S–M | 중 |
+| **PE-P0-3** | MainWindow 병렬 라이프사이클 자동 테스트 부재 | 워커 계약 테스트만 존재; deferred modal / closeEvent 미커버 | offscreen Qt 로 시그널·모달·close 계약 | M | 낮음 |
+| **PE-P0-4** | 받은문서 **fallback** 경로 viewport 미설정 | 주 경로만 1920×1080; `_ensure_edi_viewport` 는 `_doc_download` 에 **이미 존재**하나 fallback 미연결 | 기존 `_ensure_edi_viewport` 를 `_open_received_docs_fallback` 에서 호출(필요 시 export) | S | 낮음 |
+| **PE-P0-5** | firm 전환 2차 MISMATCH 후에도 워크플로우 진행 | **버그라기보다 제품 정책** — 잘못된 수임처 PDF 위험 | 제품 결정 후: skip `전환실패` 또는 1회 재선택 (결정 전 코드 변경 금지) | S | 중 |
+| **PE-P0-6** | 행 상세 대기 `timeout_s=8` vs `PRINT_BUTTON_READY_TIMEOUT_S=20` | `_open_document_row` 전략 A–D 가 상수 무시하고 8s 고정 → 느린 병렬 페인트 false fail | 호출부 상수화(또는 `ROW_DETAIL_READY_TIMEOUT_S` 분리) | S | 낮–중 |
 
 **주요 심볼**
 
@@ -91,14 +92,14 @@ CLI (nps_auto_cdp / nhis_edi_auto_cdp / comwel_auto_cdp)
 
 | ID | 문제 | 왜 | 접근 | 노력 | 위험 |
 |----|------|-----|------|------|------|
-| **PE-P1-1** | 로그 emit 이중 경로 (queue vs QThread 직접 emit) | `_pump` emit 재도입 위험 | 워커 기원 로그는 전부 enqueue+drain | M | 중 |
-| **PE-P1-2** | 포트/라벨/firms 조립 MainWindow 이중 | 4포털 추가 시 누락 | `_start_parallel_batch` + `PARALLEL_EDIS` | S | 낮음 |
-| **PE-P1-3** | `set_running` vs `_automation_active` | 게이트 누락 | `_any_automation_running()` | S | 낮음 |
-| **PE-P1-4** | bootstrap 실패 모달 + “완료” 메시지 병치 | UX 혼란 | `finished_reason` 페이로드 | S–M | 낮–중 |
-| **PE-P1-5** | 인쇄 6 + 행 4 + NPS 출력 전략 중복 | 가독성·재시도 비용 | 얇은 `try_click_strategies`; **순서 유지** | M | **높음** |
+| **PE-P1-1** | 로그 emit 이중 경로 (reader queue vs QThread 직접 emit) | reader 는 enqueue-only(계약); `run`/`stop` 은 직접 emit → 규약 혼재·`_pump` emit 재도입 위험 | 워커 기원 로그는 전부 enqueue+drain (reader 경로 유지) | M | 중 |
+| **PE-P1-2** | 포트/라벨/firms 조립 MainWindow 이중 | `_on_start`·`_on_selected_run` 동일 start kwargs 복제 | `_start_parallel_batch` + `PARALLEL_EDIS` | S | 낮음 |
+| **PE-P1-3** | `set_running`(병렬 UI) vs `_automation_active`(직렬) 이중 플래그 | 현재 close/auth/logout/update 는 둘 다 OR — **당장 게이트 누락은 아님**. 이후 단일 플래그만 검사하기 쉬움 | `_any_automation_running()` 단일 헬퍼로 통일 | S | 낮음 |
+| **PE-P1-4** | bootstrap 실패 모달 + “완료” 메시지 병치 | 실패 early-return 후에도 `all_finished` → “모든 subprocess 완료” 류 로그 가능 | `finished_reason` 페이로드 | S–M | 낮–중 |
+| **PE-P1-5** | 인쇄 6 + 행 4 + NPS 출력 전략 중복 | 가독성·재시도 비용 (DRY; 라이브 실패 근거는 아님) | 얇은 `try_click_strategies`; **순서 유지** | M | **높음** |
 | **PE-P1-6** | bootstrap skeleton 3중 복제 | 마커 계약 드리프트 | `portal_cli_bootstrap(ready_fn)` 골격만 | M | 중 |
-| **PE-P1-7** | `connect_page` 3중 유사 | domain+stealth 중복 | 파라미터 헬퍼 | S–M | 낮–중 |
-| **PE-P1-8** | 1920×1080 리터럴 분산 | 튜닝 어려움 | 공유 `EDI_VIEWPORT` | S | NPS 중 |
+| **PE-P1-7** | `connect_page` 3중 유사 | domain+stealth 중복 (COMWEL만 connect 시 viewport) | 파라미터 헬퍼 | S–M | 낮–중 |
+| **PE-P1-8** | 1920×1080 리터럴 분산 (NHIS/COMWEL/`chrome_cdp`) | 튜닝 어려움. **NPS 자동화는 현재 viewport 미설정** — 통합·NPS 신규 적용 시 회귀 주의 | 공유 `EDI_VIEWPORT` | S | 낮–중 (NPS 적용 시 중) |
 | **PE-P1-9** | 성공 경로 로그 폭주 | 실패 로그 매몰 | 성공 시 최종 전략만; `WTAX_EDI_DEBUG` | S | 낮음 |
 | **PE-P1-10** | `_name_match` / switch wait 가 CLI에만 | 단위 테스트 곤란 | `_firm_selector` 근처 + pure unit test | S | 낮음 |
 | **PE-P1-11** | lifecycle 로그 무한 append | 장기 실행 디스크 | 2–5MB 로테이션 | S | 낮음 |
@@ -112,8 +113,8 @@ CLI (nps_auto_cdp / nhis_edi_auto_cdp / comwel_auto_cdp)
 | **PE-P2-2** | MainWindow god-object | `ParallelAutomationController` | M–L | 중 |
 | **PE-P2-3** | Runner = 프로세스+프로토콜+Qt | pure orchestrator + 얇은 QThread | L | 중–높음 |
 | **PE-P2-4** | `select_doc_type` 인라인 MouseEvent | `nexacro_click` 재사용 | S | 낮음 |
-| **PE-P2-5** | `_trace` NHIS/NPS 이중 | 공통 `debug_trace` | S | 낮음 |
-| **PE-P2-6** | Crownix PDF wait/rename 유사 | 공통 `%PDF-` wait (ClipReport 분리) | M | 중 |
+| **PE-P2-5** | `_trace` NHIS/NPS/**COMWEL** 삼중 복제 | 공통 `debug_trace` | S | 낮음 |
+| **PE-P2-6** | Crownix/rdPreview PDF wait/rename 유사 | 공통 `%PDF-` wait (**COMWEL ClipReport 는 분리 유지**) | M | 중 |
 
 ---
 
@@ -144,11 +145,14 @@ Wave B (테스트·UX)
 Wave C (포털 DRY — 라이브 스모크 필수)
   PE-P0-5 (제품 결정 후), P1-7, P1-8, P1-6
 
-Wave D (전략 축소 — 성공 전략 메트릭 수집 후)
-  PE-P1-1, P1-5
+Wave D1 (워커 emit 규약 통일 — 금지구역 8 인접)
+  PE-P1-1
+
+Wave D2 (전략 DRY — 성공 전략 메트릭 수집 후)
+  PE-P1-5
 
 Wave E (제품 펀딩 시)
-  PE-P2-1 ~ P2-3
+  PE-P2-1 ~ P2-3  (+ 여유 시 P2-4 ~ P2-6)
 ```
 
 **각 Wave 완료 조건**
@@ -188,8 +192,23 @@ Wave E (제품 펀딩 시)
 
 ---
 
-## 8. 변경 이력
+## 8. 재검증 요약 (2026-08-07)
+
+코드(`1.1.4` / `deb0791` 이후 문서 커밋만 존재)와 전 항목을 다시 대조했다.
+
+| 판정 | 내용 |
+|------|------|
+| **종합** | 백로그는 현 코드와 정합. **전면 재작성 불필요.** |
+| **PE 상태** | P0–P2 전부 **VALID(잔존)** — ALREADY FIXED / INVALID 로 폐기할 항목 없음 |
+| **§1·§1.1·금지구역** | 아키텍처·회귀 계약·pytest 커버 범위와 일치 |
+| **본 갱신 범위** | 표현 정밀화만 (P0-1 레이스, P0-4 기존 헬퍼 연결, P1-3 이중 플래그, P1-8 NPS 현재 미설정, P2-5 삼중, Wave D 분리). **신규 PE·우선순위 재배치 없음** |
+| **코드** | 본 문서 갱신만 — 리팩터 미실시 |
+
+---
+
+## 9. 변경 이력
 
 | 날짜 | 내용 |
 |------|------|
 | 2026-08-06 | 초안 — v1.1.4 안정화 직후 서브에이전트 조사 기반. **코드 리팩터 미실시.** |
+| 2026-08-07 | 재검증(서브에이전트 2종 + 교차 확인). 문구 정밀화·Wave D1/D2 분리·§8 재검증 요약. 항목 폐기/신규 없음. |

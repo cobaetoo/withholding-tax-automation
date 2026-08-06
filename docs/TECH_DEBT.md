@@ -3,13 +3,14 @@
 > **목적:** 원천징수세 자동화 프로젝트의 기술 부채·결함·로드맵을 **단일 진실표**로 통합 관리.
 > 산재해 있던 부채 관련 내용(핸드오프·도메인 PROGRESS·GUIDE 임베디드 리스크)을 한곳에서 우선순위화한다.
 >
-> **기준 시점:** 2026-08-06 · **버전:** `1.1.4` (`src/version.py`)
+> **기준 시점:** 2026-08-07 · **버전:** `1.1.4` (`src/version.py`)
 > **관점:** GUI 프로그램(`gui_main.py` → `MainWindow` → Workers → Workflows → Automation → Utils → Chrome CDP) 기준.
 > 코드를 수정하기 전, 본 문서의 해당 항목과 [§1 산재 문서 관계]를 함께 읽을 것.
 >
 > **공단 EDI 병렬(v1.1.4 안정화 후 구조 백로그):**  
 > [parallel-edi-refactoring-backlog.md](parallel-edi-refactoring-backlog.md)  
-> (PE-P0~P2 · 금지구역 · Wave 순서. **지금 코드 리팩터 대상 아님** — 추후 별도 작업.)
+> (PE-P0~P2 · 금지구역 · Wave A–E. **지금 코드 리팩터 대상 아님** — 추후 별도 작업.  
+> 2026-08-07 재검증: 전 항목 VALID·항목 폐기/신규 없음 — 문서 문구 정밀화만.)
 >
 > **세션 마무리(2026-07-25):** 옵션 A(TD-05·17·02·10) 완료·push. **Wave 3(옵션 B)는 보류**
 > (실행 경로 변경·골든 미캡처·파급 전 Phase — 위험 높음). 다음 구조 작업은
@@ -44,7 +45,7 @@
 |---|---|
 | `docs/refactoring-handoff.md` | **Wave 3**(engine↔runner)·**Wave 4**(메뉴정리). TD-02/05 데이터 결함은 2026-07-25 선조치됨 — Wave 3 본체는 여전히 **TD-04 / TD-13**. 골든 스냅샷 기법은 handoff가 원천. |
 | `docs/parallel-automation-handoff.md` | 병렬 안정화 이력·open items. 본 문서 **TD-07 / LV-4 / LV-5** 참조. |
-| `docs/parallel-edi-refactoring-backlog.md` | **v1.1.4 이후** 병렬 구조 리팩터 백로그만 (PE-*). TD-07 ↔ PE-P2-1. 코드 착수 전 필수 열람. |
+| `docs/parallel-edi-refactoring-backlog.md` | **v1.1.4 이후** 병렬 구조 리팩터 백로그만 (PE-*). TD-07 ↔ PE-P2-1 · **TD-19**. 2026-08-07 재검증 완료. 코드 착수 전 필수 열람. |
 | `docs/parallel-first-run-investigation.md` | 신규 병렬 프로필의 보안모듈/주소창 없는 팝업 문제 조사·수정·테스트 기록. **LV-4**의 최신 세부 근거. |
 | `src/automation/wehago/PROGRESS.md` | 도메인 진행 + `## 다음 단계 TODO`(대부분 MVP 시절, 상당수 완료). 미완료만 **LV-5**로 인용. |
 | `src/automation/hometax/PROGRESS.md` | 제출 플로우 완료·라이브 검증(2026-07-17). **Phase 10 `enabled=True`**. 남은 TODO: 접수증 저장·신고내역 다운로드. ⚠ 포트 `9222` 오기 — TD-12. |
@@ -64,7 +65,7 @@
 | **TD-05** | 🔴 | ✅ | 데이터결함 | ~~`DELETE FROM clients` WHERE 없음~~ → **해결**: `WHERE portal=?` + override 스냅샷도 portal 스코프 | `ClientRepository.replace_clients_preserving_mgmt` | 타 포털 수임처 보호 | 🔍 | 둘 다 |
 | **TD-06** | 🟡 | ⬜ | 구조 | MainWindow **1,124줄** + UI↔DB 직결 (raw `sqlite3` + Repository **3종** 직접 호출) | `src/ui/main_window.py:422,522,525,797,810,825-830` | 계층 분리 약화 | 🔍 | 둘 다 |
 | **TD-07** | 🟡 | ⬜ | 런타임 | 병렬(Phase 2)이 SQLite 영속상태 미사용 → 체크포인트·재시도 불가 | `parallel_cli_worker` + `_parallel_report` · 상세 백로그 **PE-P2-1** | 크래시 시 result_summary 1회성만, 복구 불가 | 🔍 | 분석 |
-| **TD-19** | 🟢 | ⬜ | 구조·문서 | 공단 EDI 병렬 안정화(v1.1.4) 후 구조 부채 일괄 추적 | [parallel-edi-refactoring-backlog.md](parallel-edi-refactoring-backlog.md) | 추후 Wave A–E; 라이브 계약(금지구역) 준수 | 🔍 | 분석 |
+| **TD-19** | 🟢 | ⬜ | 구조·문서 | 공단 EDI 병렬 안정화(v1.1.4) 후 구조 부채 일괄 추적 | [parallel-edi-refactoring-backlog.md](parallel-edi-refactoring-backlog.md) | 추후 Wave A–E; 금지구역 준수. 2026-08-07 코드 재검증·문서 정밀화(항목 변경 없음) | 🔍 | 분석 |
 | **TD-08** | 🟡 | ⬜ | correctness | `Portal` enum에 `COMWEL_EDI` 누락 — 다만 **현재 `Portal()` 호출부 0곳이라 잠재 위험** | `src/batch/models.py:18-33` | 향후 enum 사용 시 ValueError, `display_name` 미표시 | 🔍 | 분석 |
 | **TD-09** | 🟡 | ⬜ | 구조 | `auth.py`가 `src.ui.resources.auth_config` 역참조 (utils→ui) | `src/utils/auth.py:18` | 계층 의존 방향 위반 (역방향 간선) | 🔍 | 분석 |
 | **TD-10** | 🟡 | ✅ | correctness | ~~포털 필터 없음~~ → **해결**: `mark_crashed_as_recoverable(portal=)` + engine.initialize 전달 | `BatchRepository.mark_crashed_as_recoverable` | 타 포털 running 배치 보호 | 🔍 | 분석 |
@@ -220,6 +221,7 @@
 
 | 일자 | HEAD | 내용 |
 |---|---|---|
+| 2026-08-07 | (본 커밋) | **TD-19 연계 문서 재검증.** `parallel-edi-refactoring-backlog.md` 전 항목 코드 대조(서브에이전트 2종) — PE 전부 VALID·폐기/신규 없음. 백로그 문구 정밀화 + Wave D1/D2 분리만. **코드 리팩터 미실시.** 기준 시점 2026-08-07 |
 | 2026-07-16 | `ad483f8` | 최초 작성 (v1.0.3 기준, TD-01~16 + LV-1~5) |
 | 2026-07-20 | `3202b50` | **전 항목 코드 재검증 후 갱신 (v1.0.5 기준)** — 아래 참조 |
 | 2026-07-29 | `f0980e9` | **TD-18 신규 ✅ + LV-6 신규.** 만료 게이트 자동 업데이트 경로 구현(A안). 적대적 리뷰로 결함 3건(취소 시 무창 종료·취소 무시 설치·확인 모달 무한대기) 수정, 이후 독립 스모크로 `prog.close()` 의 `canceled` 재emit 회귀를 추가 발견·수정. Qt 게이트 테스트 신설(offscreen 4). 전체 263 passed. 실기기 검증은 LV-6 로 이월 |
