@@ -19,6 +19,7 @@ from src.ui.widgets.company_table import CompanyTable
 from src.ui.widgets.step_detail import StepDetail
 from src.ui.workers.automation_runner import AutomationRunner
 from src.ui.workers.auth_worker import AuthWorker
+from src.ui.workers.parallel_preflight_worker import ParallelPreflightWorker
 from src.ui.workers.update_worker import UpdateWorker
 from src.ui.resources.auth_config import AUTH_REFRESH_INTERVAL_SECS
 from src.utils import updater
@@ -58,6 +59,11 @@ class MainWindow(QMainWindow):
         self._parallel_results = {}  # {which: {"total","completed","not_found":[...]}}
         self._parallel_portal_status = {}  # {which: bool}; CLI 종료 코드 기준
         self._parallel_report_pending = False
+        # 병렬 EDI 사전점검은 포털 HTTPS 확인만 별도 QThread에서 수행한다. 실제
+        # Chrome/프로필/인증서를 건드리지 않으며, 결과 모달은 스레드 종료 후 표시한다.
+        self._parallel_preflight_worker = None
+        self._parallel_preflight_pending = None
+        self._parallel_preflight_thread_finished = False
 
         self._selected_phase = 1
         self._selected_job_id = 0
@@ -82,6 +88,7 @@ class MainWindow(QMainWindow):
         self.company_table.selected_run_requested.connect(self._on_selected_run)
         self.company_table.full_run_requested.connect(self._on_start)
         self.company_table.stop_requested.connect(self._on_stop)
+        self.company_table.parallel_preflight_requested.connect(self._on_parallel_preflight)
         self.company_table.management_number_changed.connect(self._on_management_number_changed)
         self.company_table.report_cycle_changed.connect(self._on_report_cycle_changed)
 
@@ -359,9 +366,9 @@ class MainWindow(QMainWindow):
     def _on_phase_selected(self, phase_id: int):
         # 병렬 자동화 실행 중 phase 전환 금지 — 정지 버튼(full_run_btn)이
         # set_client_mode/set_selected_run_mode 에 의해 다시 숨겨지는 것을 막는다.
-        if self.parallel_runner.is_running():
+        if self.parallel_runner.is_running() or self._parallel_preflight_in_progress():
             self.statusBar().showMessage(
-                "병렬 실행 중에는 페이즈를 변경할 수 없습니다. 먼저 '정지'하세요."
+                "병렬 실행 또는 사전점검 중에는 페이즈를 변경할 수 없습니다. 잠시 기다려 주세요."
             )
             return
         self._selected_phase = phase_id
@@ -426,6 +433,10 @@ class MainWindow(QMainWindow):
             self.phone_input.clear()
         self.phone_error_label.setVisible(False)
 
+        # 사전점검은 공단 EDI 병렬 phase에서만 노출한다. set_client_mode(False)가
+        # 이전 phase의 버튼 상태를 리셋하므로 모든 phase 전환 끝에 명시한다.
+        self.company_table.set_parallel_preflight_visible(self._is_parallel())
+
     def _get_portal_for_phase(self, phase_id: int) -> str | None:
         """페이즈 ID에 해당하는 포털 반환"""
         from src.workflows.registry import get_phase_info
@@ -443,6 +454,15 @@ class MainWindow(QMainWindow):
     def _is_parallel(self) -> bool:
         """현재 선택 phase 가 병렬(공단 EDI 병렬 자동화)인지."""
         return bool(self._phase_info(self._selected_phase).get("is_parallel"))
+
+    def _parallel_preflight_in_progress(self) -> bool:
+        """사전점검 스레드 또는 결과 표시 대기 상태인지 반환."""
+        worker = self._parallel_preflight_worker
+        try:
+            running = worker is not None and worker.isRunning()
+        except RuntimeError:
+            running = False
+        return bool(running or self._parallel_preflight_pending is not None)
 
     def _needs_password(self, phase_id: int) -> bool:
         """UI 비밀번호 필드가 필요한 phase(Phase 7, 8) 여부."""
@@ -563,6 +583,143 @@ class MainWindow(QMainWindow):
         """수임처 테이블에서 행 클릭 → 세부 단계 표시"""
         self._selected_job_id = job_id
         self._poll_step_detail()
+
+    # ── 공단 EDI 병렬 사전점검 ──
+
+    def _on_parallel_preflight(self):
+        """새 PC의 병렬 EDI 환경을 변경 없이 점검한다."""
+        if not self._is_parallel():
+            return
+        if self.parallel_runner.is_running() or self._automation_active:
+            self._on_log("[병렬 사전점검] 자동화 실행이 끝난 뒤 다시 시도하세요.")
+            return
+        if self._parallel_preflight_in_progress():
+            self._on_log("[병렬 사전점검] 이미 진행 중입니다. 잠시 기다려 주세요.")
+            return
+
+        worker = ParallelPreflightWorker(self)
+        self._parallel_preflight_worker = worker
+        self._parallel_preflight_pending = None
+        self._parallel_preflight_thread_finished = False
+        worker.check_done.connect(
+            self._on_parallel_preflight_done, Qt.ConnectionType.QueuedConnection)
+        worker.failed.connect(
+            self._on_parallel_preflight_failed, Qt.ConnectionType.QueuedConnection)
+        worker.finished.connect(
+            self._on_parallel_preflight_finished, Qt.ConnectionType.QueuedConnection)
+        self.company_table.set_parallel_preflight_enabled(False)
+        self.statusBar().showMessage("병렬 EDI 사전점검 중…")
+        self._on_log(
+            "[병렬 사전점검] Chrome·저장 경로·포털 연결·전용 프로필을 읽기 전용으로 확인합니다."
+        )
+        worker.start()
+
+    def _on_parallel_preflight_done(self, report: dict):
+        """사전점검 결과를 받아 QThread 종료 뒤에만 표시하도록 보관한다."""
+        if not isinstance(report, dict):
+            report = {
+                "checks": [], "errors": 1, "warnings": 0, "infos": 0,
+                "ready": False,
+                "internal_error": "사전점검 결과 형식이 올바르지 않습니다.",
+            }
+        self._parallel_preflight_pending = ("report", report)
+        QTimer.singleShot(0, self._deferred_parallel_preflight_result)
+
+    def _on_parallel_preflight_failed(self, detail: str):
+        """예상하지 못한 사전점검 워커 오류."""
+        self._parallel_preflight_pending = ("error", str(detail))
+        QTimer.singleShot(0, self._deferred_parallel_preflight_result)
+
+    def _on_parallel_preflight_finished(self):
+        """워커 종료 후 중복 클릭을 막은 버튼을 복구할 준비를 한다."""
+        self._parallel_preflight_thread_finished = True
+        worker = self._parallel_preflight_worker
+        self._parallel_preflight_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        QTimer.singleShot(0, self._deferred_parallel_preflight_result)
+
+    def _deferred_parallel_preflight_result(self):
+        """사전점검 QThread가 완전히 끝난 뒤 로그/모달을 표시한다."""
+        pending = self._parallel_preflight_pending
+        if pending is None:
+            return
+        if not self._parallel_preflight_thread_finished:
+            QTimer.singleShot(25, self._deferred_parallel_preflight_result)
+            return
+
+        self._parallel_preflight_pending = None
+        self._parallel_preflight_thread_finished = False
+        if self._is_parallel():
+            self.company_table.set_parallel_preflight_enabled(True)
+
+        kind, payload = pending
+        if kind == "error":
+            detail = str(payload)
+            self._on_log(f"[병렬 사전점검] 오류: {detail}")
+            self.statusBar().showMessage("병렬 EDI 사전점검 오류", 15000)
+            QMessageBox.warning(
+                self, "병렬 EDI 사전점검",
+                "사전점검을 완료하지 못했습니다. 프로그램을 다시 실행한 뒤 재시도하세요.\n\n"
+                f"상세: {detail}",
+            )
+            return
+
+        report = payload if isinstance(payload, dict) else {}
+        checks = report.get("checks") if isinstance(report.get("checks"), list) else []
+        errors = int(report.get("errors", 0) or 0)
+        warnings = int(report.get("warnings", 0) or 0)
+        infos = int(report.get("infos", 0) or 0)
+
+        icon = {"ok": "✓", "warning": "!", "error": "✗", "info": "i"}
+        for check in checks:
+            if not isinstance(check, dict):
+                continue
+            label = str(check.get("label", "점검 항목"))
+            status = str(check.get("status", "info"))
+            detail = str(check.get("detail", ""))
+            self._on_log(
+                f"[병렬 사전점검] {icon.get(status, 'i')} {label} — {detail}"
+            )
+        self._on_log(
+            f"[병렬 사전점검] 완료: 차단 {errors}건 / 확인 필요 {warnings}건 / 안내 {infos}건"
+        )
+
+        non_ok = [
+            check for check in checks
+            if isinstance(check, dict) and check.get("status") in ("error", "warning")
+        ]
+        if errors:
+            headline = f"실행 전에 해결할 차단 항목이 {errors}건 있습니다."
+            self.statusBar().showMessage(f"병렬 사전점검: 차단 항목 {errors}건", 15000)
+        elif warnings:
+            headline = (
+                f"자동 차단 항목은 없지만, 확인 또는 최초 준비가 필요한 항목이 {warnings}건 있습니다."
+            )
+            self.statusBar().showMessage(f"병렬 사전점검: 확인 필요 {warnings}건", 15000)
+        else:
+            headline = "자동으로 확인 가능한 항목은 모두 통과했습니다."
+            self.statusBar().showMessage("병렬 EDI 사전점검 통과", 10000)
+
+        lines = [headline, "", "이 점검은 Chrome·프로필·인증서를 변경하지 않습니다."]
+        if non_ok:
+            lines.extend(["", "확인할 항목"])
+            for check in non_ok[:8]:
+                lines.append(
+                    f"{'✗' if check.get('status') == 'error' else '!'} "
+                    f"{check.get('label', '점검 항목')}: {check.get('detail', '')}"
+                )
+            if len(non_ok) > 8:
+                lines.append(f"… 외 {len(non_ok) - 8}건은 하단 로그에서 확인하세요.")
+        lines.extend([
+            "",
+            "공동인증서와 기관별 업무 권한은 개인정보·권한 영역이므로 각 전용 Chrome 창에서 직접 확인해야 합니다.",
+        ])
+        message = "\n".join(lines)
+        if errors or warnings:
+            QMessageBox.warning(self, "병렬 EDI 사전점검 결과", message)
+        else:
+            QMessageBox.information(self, "병렬 EDI 사전점검 결과", message)
 
     def _on_parallel_finished(self):
         """병렬 QThread 종료 시그널 — UI 복구 후 리포트는 스레드 완전 종료 뒤로 미룸.
@@ -756,6 +913,9 @@ class MainWindow(QMainWindow):
     # ── 제어 ──
 
     def _on_start(self):
+        if self._parallel_preflight_in_progress():
+            self._on_log("[병렬 사전점검 중] 점검 결과를 확인한 뒤 실행하세요.")
+            return
         if self.parallel_runner.is_running():
             self._on_log("[병렬 실행 중] 단일 전체실행은 병렬 종료 후 가능합니다.")
             return
@@ -847,15 +1007,22 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         parallel_running = False
+        preflight_worker = self._parallel_preflight_worker
+        preflight_running = False
         try:
             parallel_running = self.parallel_runner.is_running()
         except Exception:
             pass
         try:
+            preflight_running = preflight_worker is not None and preflight_worker.isRunning()
+        except RuntimeError:
+            preflight_running = False
+        try:
             from src.utils.lifecycle_log import log_event
             log_event(
                 "closeEvent",
                 parallel_running=parallel_running,
+                preflight_running=preflight_running,
                 automation=getattr(self, "_automation_active", False),
             )
         except Exception:
@@ -898,6 +1065,11 @@ class MainWindow(QMainWindow):
             )
             self.parallel_runner.stop()
             self.parallel_runner.wait(5000)
+        # 사전점검은 최대 수 초의 HTTPS 읽기 작업이다. 실행 중 QThread를 파괴하면
+        # Qt가 프로세스를 abort할 수 있으므로 종료 전에 짧게 마무리를 기다린다.
+        if preflight_running and preflight_worker is not None:
+            self._on_log("[병렬 사전점검] closeEvent — 점검 스레드 종료 대기")
+            preflight_worker.wait(10000)
         self.runner.request_stop()
         self.runner.wait(3000)
         event.accept()
@@ -1015,6 +1187,9 @@ class MainWindow(QMainWindow):
 
     def _on_selected_run(self, clients: list[dict]):
         """선택건 실행: 선택된 수임처 여러 건에 대해 순차 자동화 실행"""
+        if self._parallel_preflight_in_progress():
+            self._on_log("[병렬 사전점검 중] 점검 결과를 확인한 뒤 실행하세요.")
+            return
         if self.parallel_runner.is_running():
             self._on_log("[병렬 실행 중] 단일 선택실행은 병렬 종료 후 가능합니다.")
             return

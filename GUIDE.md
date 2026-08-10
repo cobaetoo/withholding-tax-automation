@@ -486,6 +486,12 @@ AutomationRunner (AsyncWorker)
 동시에 처리한다. Chrome은 `subprocess.Popen`으로 실행하며, Playwright는
 `connect_over_cdp`로 연결한다.
 
+v1.1.10 이상에서는 공단 EDI 병렬 메뉴의 수임처 표 상단 버튼 행 **맨 오른쪽**에
+`병렬 사전점검`을 제공한다. 이 점검은 Chrome·저장 경로·전용 프로필 준비 마커·포털
+HTTPS 연결만 읽기 전용으로 확인하며, 아직 열리지 않은 CDP 포트(9223/9224/9225)는
+조회하지 않는다. 포트는 실제 병렬 실행 시 앱이 열고 검증한다. 새 PC 준비 절차는
+[`docs/parallel-edi-other-pc-setup.md`](docs/parallel-edi-other-pc-setup.md)를 따른다.
+
 ## 8. 데이터베이스 스키마
 
 SQLite (`data/withholding_tax.db`), FK 제약조건 활성화:

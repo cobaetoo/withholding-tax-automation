@@ -90,7 +90,43 @@ def test_running_forces_visible_regardless_of_incoming_state():
     assert ct.full_run_btn.isHidden() is True
     ct.set_running(True)
     assert ct.full_run_btn.isHidden() is False
+
+
+def test_parallel_preflight_button_phase_visibility_and_running_lock():
+    """사전점검 버튼은 병렬 phase에서만 보이고, 병렬 실행 중에는 잠긴다."""
+    ct = CompanyTable()
+    assert ct.parallel_preflight_btn.isHidden() is True
+
+    ct.set_parallel_preflight_visible(True)
+    assert ct.parallel_preflight_btn.isHidden() is False
+    assert ct.parallel_preflight_btn.isEnabled() is True
+
+    ct.set_running(True)
+    assert ct.parallel_preflight_btn.isHidden() is False
+    assert ct.parallel_preflight_btn.isEnabled() is False
+
+    ct.set_running(False)
+    assert ct.parallel_preflight_btn.isHidden() is False
+    assert ct.parallel_preflight_btn.isEnabled() is True
+
+
+def test_parallel_preflight_button_emits_request():
+    ct = CompanyTable()
+    received = []
+    ct.parallel_preflight_requested.connect(lambda: received.append(True))
+    ct.set_parallel_preflight_visible(True)
+    ct.parallel_preflight_btn.click()
+    app.processEvents()
+    assert received == [True]
     assert ct.full_run_btn.isEnabled() is True
+
+
+def test_parallel_preflight_button_is_rightmost_in_action_row():
+    """사전점검은 실행 버튼들과 분리해 버튼 행의 맨 오른쪽에 둔다."""
+    ct = CompanyTable()
+    row = ct._btn_row_widget.layout()
+    assert row.indexOf(ct.parallel_preflight_btn) == row.count() - 1
+    assert row.itemAt(row.count() - 2).spacerItem() is not None
 
 
 if __name__ == "__main__":
@@ -98,7 +134,10 @@ if __name__ == "__main__":
                test_idle_restore_equivalent_to_old_three_calls,
                test_stop_click_emits_stop_requested_while_running,
                test_idle_click_does_not_emit_stop,
-               test_running_forces_visible_regardless_of_incoming_state):
+               test_running_forces_visible_regardless_of_incoming_state,
+               test_parallel_preflight_button_phase_visibility_and_running_lock,
+               test_parallel_preflight_button_emits_request,
+               test_parallel_preflight_button_is_rightmost_in_action_row):
         fn()
         print(f"PASS: {fn.__name__}")
     print("\n모든 set_running 테스트 통과")

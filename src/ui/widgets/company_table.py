@@ -202,6 +202,8 @@ class CompanyTable(QWidget):
     selected_run_requested = Signal(list)  # [{"name": str, "business_number": str}, ...]
     full_run_requested = Signal()
     stop_requested = Signal()
+    # 공단 EDI 병렬(Phase 2)에서만 노출하는 읽기 전용 PC 환경 점검 요청.
+    parallel_preflight_requested = Signal()
     management_number_changed = Signal(int, str)  # (client_id, override_value) — DB 저장용 릴레이
     report_cycle_changed = Signal(int, str)       # (client_id, 매월|반기|"") — DB 저장용 릴레이
 
@@ -209,6 +211,7 @@ class CompanyTable(QWidget):
         super().__init__(parent)
         self._selected_clients: list[dict] = []
         self._is_running = False
+        self._parallel_preflight_visible = False
         self._setup_ui()
 
         # 선택 변경 시그널 — 한 번만 연결
@@ -231,6 +234,15 @@ class CompanyTable(QWidget):
         self.delete_all_btn.setStyleSheet(BTN_RED)
         self.delete_all_btn.clicked.connect(self.delete_all_requested.emit)
 
+        self.parallel_preflight_btn = QPushButton("병렬 사전점검")
+        self.parallel_preflight_btn.setStyleSheet(BTN_BLUE)
+        self.parallel_preflight_btn.setToolTip(
+            "Chrome·저장 경로·포털 연결·기관별 전용 프로필 준비 상태를\n"
+            "변경 없이 확인합니다. 공동인증서와 업무 권한은 직접 확인해야 합니다."
+        )
+        self.parallel_preflight_btn.clicked.connect(self.parallel_preflight_requested.emit)
+        self.parallel_preflight_btn.setVisible(False)
+
         self.full_run_btn = QPushButton("전체실행")
         self.full_run_btn.setStyleSheet(BTN_GREEN)
         self.full_run_btn.clicked.connect(self._on_full_run_clicked)
@@ -247,6 +259,8 @@ class CompanyTable(QWidget):
         btn_row.addWidget(self.full_run_btn)
         btn_row.addWidget(self.selected_run_btn)
         btn_row.addStretch()
+        # 사전점검은 실행 버튼과 구분되는 보조 기능이므로 같은 행의 맨 오른쪽에 둔다.
+        btn_row.addWidget(self.parallel_preflight_btn)
 
         self._btn_row_widget = QWidget()
         self._btn_row_widget.setLayout(btn_row)
@@ -322,6 +336,8 @@ class CompanyTable(QWidget):
         """Phase 1 모드: 새로가져오기/모두삭제 표시, 전체실행/선택건실행 숨김"""
         self.refresh_btn.setVisible(enabled)
         self.delete_all_btn.setVisible(enabled)
+        # 다른 phase에 남아 있던 병렬 전용 점검 버튼이 보이지 않게 기본값으로 숨긴다.
+        self.set_parallel_preflight_visible(False)
         self.full_run_btn.setVisible(not enabled)
         self.selected_run_btn.setVisible(not enabled)
         self.selection_hint.setVisible(not enabled)
@@ -345,11 +361,27 @@ class CompanyTable(QWidget):
         else:
             self.selection_hint.setVisible(False)
 
+    def set_parallel_preflight_visible(self, visible: bool):
+        """공단 EDI 병렬 phase에서만 사전점검 버튼을 표시한다."""
+        self._parallel_preflight_visible = bool(visible)
+        self.parallel_preflight_btn.setVisible(self._parallel_preflight_visible)
+        self.parallel_preflight_btn.setEnabled(
+            self._parallel_preflight_visible and not self._is_running
+        )
+
+    def set_parallel_preflight_enabled(self, enabled: bool):
+        """점검 실행 중에는 중복 실행을 막되, 다른 실행 버튼과는 독립 제어한다."""
+        self.parallel_preflight_btn.setEnabled(
+            self._parallel_preflight_visible and not self._is_running and bool(enabled)
+        )
+
     def set_buttons_enabled(self, enabled: bool):
         """버튼 활성/비활성 (실행 중 잠금)"""
         self.refresh_btn.setEnabled(enabled)
         self.delete_all_btn.setEnabled(enabled)
         self.full_run_btn.setEnabled(enabled)
+        if self._parallel_preflight_visible and not self._is_running:
+            self.parallel_preflight_btn.setEnabled(enabled)
 
     def _on_selection_changed(self, selected, deselected):
         """멀티 선택 변경 시 선택된 수임처 목록 업데이트"""
@@ -419,6 +451,7 @@ class CompanyTable(QWidget):
             self.full_run_btn.setVisible(True)
             self.refresh_btn.setEnabled(False)
             self.delete_all_btn.setEnabled(False)
+            self.parallel_preflight_btn.setEnabled(False)
             self.selected_run_btn.setVisible(False)
             self.selection_hint.setVisible(False)
         else:
@@ -428,6 +461,8 @@ class CompanyTable(QWidget):
             self.full_run_btn.setVisible(True)
             self.refresh_btn.setEnabled(True)
             self.delete_all_btn.setEnabled(True)
+            self.parallel_preflight_btn.setVisible(self._parallel_preflight_visible)
+            self.parallel_preflight_btn.setEnabled(self._parallel_preflight_visible)
             self.selected_run_btn.setVisible(True)
             self.selected_run_btn.setEnabled(False)
             self._selected_clients = []
