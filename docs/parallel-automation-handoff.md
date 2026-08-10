@@ -611,3 +611,36 @@ CDP 포트가 열린 시점만 성공으로 판단해, 포털 보안모듈·공�
 안정화 직후 구조 개선 후보·금지구역·Wave 순서는  
 **[parallel-edi-refactoring-backlog.md](parallel-edi-refactoring-backlog.md)** 에만 정리한다.  
 기능 코드 리팩터는 해당 문서 Wave 단위로 **별도 PR**에서 진행한다.
+
+## 19. NHIS 실행 결과 신뢰성 보강 (2026-08-10, v1.1.5–v1.1.6)
+
+### 19.1 병렬 NHIS 사업장 전환·실패 전파 (v1.1.5)
+
+- 각 수임처 시작 전에 `retrieveMain`으로 로그인 기본 사업장 상태를 복원한다. 실패 또는
+  미발견 뒤의 stale state가 다음 수임처에 이어지는 것을 막는다.
+- 선택한 수임처의 전환 검증이 불일치하면 해당 수임처를 즉시 실패 처리한다. 기본 사업장
+  자료를 잘못 저장한 채 계속 진행하지 않는다.
+- `run_auto_batch()`가 수임처 실패를 Boolean 결과로 반환하고 CLI 종료 코드 1로 승격한다.
+  GUI 병렬 실행도 이 종료 코드를 받아 건강보험을 완료로 오표시하지 않는다.
+
+### 19.2 단일 NHIS 받은문서 즉시 탭 감지 (v1.1.6)
+
+**증상:** 수임사업장 선택까지 정상이나 `pageLinkPopup1('201')` 호출 뒤
+`새 탭 미감지`가 반복되고, 대체 클릭도 웹EDI 탭을 찾지 못해 PDF 다운로드가 중단됐다.
+
+**원인:** `wait_for_new_tab()`가 클릭 뒤에 기존 탭 목록을 기록했다. 사이트가 클릭과
+동시에 `window.open`으로 웹EDI를 열면, 이미 생성된 탭이 기존 탭으로 분류되어 감지 대상에서
+제외됐다.
+
+**수정:** 공용 탭 대기 함수가 클릭 전 탭 목록(`pages_before`)을 선택적으로 받도록 확장하고,
+일반 `pageLinkPopup1` 경로와 받은문서 대체 클릭 경로 모두 클릭 직전 snapshot을 전달한다.
+다른 호출부는 기존 동작을 유지한다.
+
+### 19.3 검증
+
+- 신규 회귀: 즉시 생성된 웹EDI 탭 감지와 `open_received_docs()` 성공 경로를 고정하는
+  `tests/test_nhis_received_docs_tab.py`.
+- 병렬 회귀: `tests/test_nhis_parallel_batch.py`, `tests/test_parallel_bootstrap.py`로
+  reset, 전환 불일치 중단, batch/GUI 실패 전파를 확인.
+- 전체 자동 테스트 **318 passed**, 보호 빌드(`python build.py`) 통과.
+- v1.1.6 설치 후 단일 국민건강보험 EDI 라이브 실행에서 받은문서·웹EDI 진입 및 처리 완료 확인.

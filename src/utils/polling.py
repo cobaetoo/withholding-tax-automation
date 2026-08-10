@@ -32,7 +32,9 @@ async def wait_for_element(page, element_id, timeout=10, interval=1):
     return False
 
 
-async def wait_for_new_tab(context, url_pattern, timeout=10, interval=1):
+async def wait_for_new_tab(
+    context, url_pattern, timeout=10, interval=1, *, pages_before=None,
+):
     """새 브라우저 탭이 열릴 때까지 대기
 
     context.pages 중 이전에 없던 새 탭에서 url_pattern이 매칭되는 것을 찾음.
@@ -42,11 +44,14 @@ async def wait_for_new_tab(context, url_pattern, timeout=10, interval=1):
         url_pattern: 탭 URL에 포함되어야 할 문자열
         timeout: 최대 대기 시간(초)
         interval: 폴링 간격(초)
+        pages_before: 클릭 전에 기록한 기존 탭 id 집합. 전달하면 클릭과 대기
+            사이에 즉시 생성된 탭도 새 탭으로 판정한다.
 
     Returns:
         tuple[Page | None, set]: (발견된 새 탭, 기존 탭 ID 집합)
     """
-    pages_before = set(id(pg) for pg in context.pages)
+    if pages_before is None:
+        pages_before = set(id(pg) for pg in context.pages)
 
     for i in range(timeout):
         await asyncio.sleep(interval)

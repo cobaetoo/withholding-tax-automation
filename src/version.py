@@ -12,4 +12,4 @@ build.py가 installer.iss(`AppVersion`)에 주입하는 버전이 모두 갱신�
 build.py가 이 파일을 정규식으로 파싱하므로 __version__ 정의는 단순하게 유지.
 """
 
-__version__ = "1.1.4"
+__version__ = "1.1.6"

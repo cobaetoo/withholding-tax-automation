@@ -206,6 +206,26 @@ def test_all_finished_emitted_after_run_completes(monkeypatch):
     assert runner.isRunning() is False
 
 
+def test_normal_cli_nonzero_exit_is_reported_as_portal_failure(monkeypatch):
+    """수임처별 NHIS 실패가 CLI exit=1이면 GUI가 기관 실패로 표시해야 한다."""
+    runner = _runner()
+    statuses = []
+    runner.finished_one.connect(lambda which, success: statuses.append((which, success)))
+    monkeypatch.setattr(runner, "_make_specs", _specs)
+    monkeypatch.setattr(chrome_cdp, "is_parallel_profile_ready", lambda *a, **k: True)
+
+    def fake_spawn(spec, **_kwargs):
+        return _DoneProc(returncode=1 if spec["which"] == "nhis" else 0)
+
+    monkeypatch.setattr(runner, "_spawn", fake_spawn)
+    monkeypatch.setattr(runner, "_join_reader", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "_cleanup_child_processes", lambda: None)
+
+    runner.run()
+
+    assert statuses == [("nps", True), ("nhis", False), ("comwel", True)]
+
+
 def test_bootstrap_failure_emits_bootstrap_failed_signal(monkeypatch):
     """_bootstrap_one 이 exit≠0 이면 bootstrap_failed 시그널을 보낸다."""
     runner = _runner()

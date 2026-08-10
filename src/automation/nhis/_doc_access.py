@@ -57,12 +57,13 @@ async def open_received_docs(page, context):
         log("  pageLinkPopup1 함수를 찾지 못함 — 대체 방식 시도")
         return await _open_received_docs_fallback(page, context)
 
-    # ── 2. 새 탭 열기 전 기존 탭 수 기록 ──
-    pages_before = set(id(pg) for pg in context.pages)
-
-    # ── 3. pageLinkPopup1 호출 (최대 3회 재시도) ──
+    # ── 2. pageLinkPopup1 호출 (최대 3회 재시도) ──
     for attempt in range(1, 4):
         log(f"받은문서 메뉴 클릭... (시도 {attempt}/3)")
+        # 반드시 클릭 전에 기록한다. pageLinkPopup1이 window.open을 동기 실행하면
+        # click 뒤에 snapshot을 잡는 순간 이미 열린 웹EDI 탭을 '기존 탭'으로 오인해
+        # 끝까지 찾지 못한다.
+        pages_before = set(id(pg) for pg in context.pages)
         try:
             await page.evaluate("() => { pageLinkPopup1('201'); }")
         except Exception as e:
@@ -71,7 +72,9 @@ async def open_received_docs(page, context):
             continue
 
         # 새 탭 대기
-        new_tab, _ = await wait_for_new_tab(context, "webedi", timeout=10)
+        new_tab, _ = await wait_for_new_tab(
+            context, "webedi", timeout=10, pages_before=pages_before,
+        )
         if new_tab:
             log("  웹EDI 탭 열림")
             # 모니터/DPI 차이 완화 — CSS viewport 고정 (Chrome --window-size 와 맞춤)
@@ -92,8 +95,8 @@ async def open_received_docs(page, context):
 
 async def _open_received_docs_fallback(page, context):
     """받은문서 대체 진입: pageLinkPopup1 실패 시 링크/버튼 직접 클릭"""
+    # 대체 클릭도 window.open을 동기로 호출할 수 있으므로 클릭 전 snapshot을 쓴다.
     pages_before = set(id(pg) for pg in context.pages)
-
     clicked = await page.evaluate("""() => {
         const selectors = [
             'img[alt*="받은문서"]',
@@ -149,7 +152,9 @@ async def _open_received_docs_fallback(page, context):
             log(f"    {el['tag']} text=\"{el['text']}\" alt=\"{el['alt']}\" onclick=\"{el['onclick']}\"")
         return None
 
-    new_tab, _ = await wait_for_new_tab(context, "webedi", timeout=15)
+    new_tab, _ = await wait_for_new_tab(
+        context, "webedi", timeout=15, pages_before=pages_before,
+    )
     if new_tab:
         log("  웹EDI 탭 열림 (대체 방식)")
         return new_tab

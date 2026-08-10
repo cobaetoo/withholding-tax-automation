@@ -56,6 +56,7 @@ class MainWindow(QMainWindow):
         self.parallel_runner.bootstrap_failed.connect(
             self._on_parallel_bootstrap_failed, Qt.ConnectionType.QueuedConnection)
         self._parallel_results = {}  # {which: {"total","completed","not_found":[...]}}
+        self._parallel_portal_status = {}  # {which: bool}; CLI 종료 코드 기준
         self._parallel_report_pending = False
 
         self._selected_phase = 1
@@ -572,7 +573,7 @@ class MainWindow(QMainWindow):
         Chrome 까지 같이 죽는 현상이 있었다. 리포트 모달은 스레드가 멈춘 뒤에만.
         """
         self.company_table.set_running(False)
-        self._on_log("[병렬] 모든 subprocess 완료")
+        self._on_log("[병렬] 실행 종료 — 결과를 정리합니다")
         self._parallel_report_pending = True
         QTimer.singleShot(0, self._deferred_parallel_report)
 
@@ -603,6 +604,7 @@ class MainWindow(QMainWindow):
         안 함 / 앱이 죽은 것 같다'로 오인한다. Chrome 은 유지되며 GUI 도 유지된다.
         모달은 메인 이벤트 루프 idle 시점에 표시(워커 시그널 직후 재진입 회피).
         """
+        self._parallel_portal_status[which] = False
         self._on_log(f"[병렬 준비] {label} 실패 알림: {detail}")
         self.statusBar().showMessage(
             f"병렬 준비 실패: {label} — 수임처 업무가 시작되지 않았습니다",
@@ -620,7 +622,11 @@ class MainWindow(QMainWindow):
                     "· 선택/전체 수임처 자동 업무도 시작되지 않았습니다.\n"
                     "· Chrome 창은 세션 재사용을 위해 유지됩니다 "
                     "(창을 닫으면 세션이 사라집니다).\n"
-                    "· 해당 기관에 다시 로그인한 뒤 '선택건실행' 또는 "
+                    + ("· 건강보험은 병렬 전용 Chrome 프로필(port 9224)을 사용합니다. "
+                       "열린 건강보험 창에서 보안프로그램 설치·공동인증서 로그인을 "
+                       "완료해 주세요.\n"
+                       if which == "nhis" else "")
+                    + "· 해당 기관에 다시 로그인한 뒤 '선택건실행' 또는 "
                     "'전체실행'을 다시 눌러 주세요.\n\n"
                     "이미 준비된 기관은 재실행 시 bootstrap 을 건너뜁니다.",
                 )
@@ -631,7 +637,13 @@ class MainWindow(QMainWindow):
     def _on_parallel_finished_one(self, which: str, success: bool):
         label = {"nps": "국민연금(NPS)", "nhis": "건강보험(NHIS)",
                  "comwel": "고용보험(COMWEL)"}.get(which, which)
+        self._parallel_portal_status[which] = success
         self._on_log(f"[병렬] {label} {'완료' if success else '실패(로그 확인)'}")
+
+    def _reset_parallel_result_state(self):
+        """새 병렬 요청이 이전 실행의 결과·종료 상태를 상속하지 않게 한다."""
+        self._parallel_results = {}
+        self._parallel_portal_status = {}
 
     def _on_parallel_result_summary(self, which: str, payload_json: str):
         """CLI 가 stdout 마커로 보낸 구조화 결과를 누적 (queued 로 GUI 스레드에서만 실행)."""
@@ -642,7 +654,7 @@ class MainWindow(QMainWindow):
             self._parallel_results[which] = {"not_found": []}
 
     def _show_parallel_report(self):
-        """병렬 종료 후 탐색실패(not-found) 수임처를 통합 다이얼로그로 안내.
+        """병렬 종료 후 처리 실패 수임처를 통합 다이얼로그로 안내.
 
         세 CLI(NPS/NHIS/고용보험)의 result_summary(마커) 결과를 합쳐, 한 건이라도
         not-found 가 있으면 QMessageBox 로 정리해 보여준다. 없으면 조용히 종료.
@@ -653,22 +665,36 @@ class MainWindow(QMainWindow):
         sections = []
         log_parts = []
         results = dict(self._parallel_results)
+        portal_status = dict(self._parallel_portal_status)
         self._parallel_results = {}  # 다음 실행을 위해 초기화(표시 전 스냅샷)
+        self._parallel_portal_status = {}
+        failed_portals = []
         for which, label in PORTALS:
             raw = results.get(which) or {}
             nf = raw.get("not_found") or []
             if not isinstance(nf, list):
                 nf = []
-            log_parts.append(f"{label} 미탐색 {len(nf)}건")
+            if portal_status.get(which) is False:
+                failed_portals.append(label)
+            log_parts.append(f"{label} 처리실패 {len(nf)}건")
             if nf:
                 sections.append((label, nf))
         self._on_log(f"[병렬] 리포트 수신: {', '.join(log_parts)}")
-        if not sections:
+        if not sections and not failed_portals:
             # 8월 등 자료 0건이어도 not_found 가 비어 있으면 조용히 종료됐음.
             # 완료 자체를 알려 사용자가 '앱이 죽은 것'으로 오인하지 않게 한다.
             self.statusBar().showMessage("병렬 자동화 완료", 10000)
             return
-        lines = ["탐색 실패(스킵) 수임처 요약", ""]
+        if not sections:
+            self.statusBar().showMessage(
+                f"병렬 자동화 실패: {', '.join(failed_portals)}", 15000)
+            return
+        lines = ["병렬 자동화 결과", ""]
+        if failed_portals:
+            lines.append(f"실행 실패 기관: {', '.join(failed_portals)}")
+            lines.append("")
+        lines.append("처리 실패 수임처 요약")
+        lines.append("")
         for label, nf in sections:
             lines.append(f"■ {label}: {len(nf)}건")
             for s in nf:
@@ -681,7 +707,13 @@ class MainWindow(QMainWindow):
             lines.append("")
         # parent=self 모달은 메인 윈도우 종료와 수명을 묶는다. 스레드 종료 후
         # 호출되므로 확인 클릭 시 GUI/Chrome 이 같이 죽지 않아야 한다.
-        QMessageBox.information(self, "병렬 자동화 결과", "\n".join(lines))
+        message = "\n".join(lines)
+        if failed_portals:
+            self.statusBar().showMessage(
+                f"병렬 자동화 일부 실패: {', '.join(failed_portals)}", 15000)
+            QMessageBox.warning(self, "병렬 자동화 결과", message)
+        else:
+            QMessageBox.information(self, "병렬 자동화 결과", message)
 
     def _on_runner_finished(self):
         self.company_table.set_run_active(False)
@@ -758,6 +790,7 @@ class MainWindow(QMainWindow):
             # 직접 계산해 line 432 의존을 없앤다 — 회귀 시에도 견고).
             mgmts = [c.get("management_number") or biz_to_mgmt_no(c.get("business_number", ""))
                      for c in active]
+            self._reset_parallel_result_state()
             self.company_table.set_running(True)
             self.parallel_runner.start(nps_port=9223, nhis_port=9224, comwel_port=9225,
                                        firms=firms, mgmts=mgmts, year=year, month=month)
@@ -1003,6 +1036,7 @@ class MainWindow(QMainWindow):
                      for c in sel]
             year = self.year_spin.value()
             month = self.month_spin.value()
+            self._reset_parallel_result_state()
             self.company_table.set_running(True)
             self.parallel_runner.start(nps_port=9223, nhis_port=9224, comwel_port=9225,
                                        firms=firms, mgmts=mgmts, year=year, month=month)

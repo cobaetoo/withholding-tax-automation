@@ -22,7 +22,7 @@ from src.automation.nhis._common_edi import (
     connect_page, wait_for_login, close_popups,
     open_firm_selector, wait_firm_selector_ready, list_all_firms, select_firm,
     select_firm_by_index, close_firm_popup,
-    run_single_firm_workflow,
+    run_single_firm_workflow, reset_main_page,
 )
 from src.utils.human import human_delay
 from src.automation.nhis import _doc_download  # _SAVE_SITE 오버라이드용 (병렬 --save-site)
@@ -324,19 +324,24 @@ async def run_auto_batch(page, context, *, firms, year, month, mgmts=None):
     run_full_auto 의 input 루프를 비대화형으로 재작성. 사업장 선택/실행은
     기존 함수(open_firm_selector/select_firm/close_firm_popup/run_single_firm_workflow) 재사용.
 
-    매 수임처마다 phase 3 의 NhisEdiWorkflow.run_single 과 동일하게 close_popups 로
-    메인(retrieveMain) 페이지를 재확보한다. 이전 수임처 워크플로우가 탭/네비게이션을
-    바꿔 page 가 stale 되면 select_firm 의 사업장 전환이 메인에 반영되지 않아 기본
+    매 수임처마다 phase 3 의 NhisEdiWorkflow.run_single 과 동일하게 메인
+    (retrieveMain)을 재로드한다. 이전 수임처 워크플로우가 탭/네비게이션을 바꿔
+    page 가 stale 되면 select_firm 의 사업장 전환이 메인에 반영되지 않아 기본
     로그인 사업장(서율회계법인 등) 자료만 반복해서 나오게 된다.
 
     mgmts: firms 와 같은 순서의 사업장관리번호. 제공되면 관리번호 검색으로 선택
     (원래 동작). 비었거나 없으면 이름 fallback.
+
+    Returns:
+        모든 대상이 정상 처리됐으면 True. 하나라도 선택·전환·PDF 처리에 실패하면
+        False. 병렬 부모가 CLI 종료 코드로 기관 실패를 표시할 수 있게 한다.
     """
     if firms is None:
         popup = await open_firm_selector(page, context)
         if not popup:
             log("ERROR: 사업장 선택 팝업 오픈 실패")
-            return
+            _emit_summary(0, 0, [])
+            return False
         await asyncio.sleep(2)
         result = await popup.evaluate(r"""() => {
             const rows = document.querySelectorAll('table.list tbody tr');
@@ -353,7 +358,8 @@ async def run_auto_batch(page, context, *, firms, year, month, mgmts=None):
         await close_firm_popup(context, popup)
         if not targets:
             log("ERROR: 사업장 목록을 불러오지 못했습니다.")
-            return
+            _emit_summary(0, 0, [])
+            return False
     else:
         targets = list(firms)
 
@@ -366,11 +372,13 @@ async def run_auto_batch(page, context, *, firms, year, month, mgmts=None):
         log(f"\n{'='*55}")
         log(f"  [{i}/{len(targets)}] {firm_name}" + (f" (관리번호 {mgmt})" if mgmt else ""))
         try:
-            # 매 수임처마다 메인 페이지 재확보 (phase 3 run_single 과 동일) —
-            # page 가 stale 되어 사업장 전환이 메인에 반영되지 않는 것을 방지.
+            # 단일 Phase 3과 동일하게 팝업 정리 → retrieveMain 재로드로 시작한다.
+            # close_popups 만 하면 실패한 이전 건의 선택 상태가 남아, 백그라운드
+            # Chrome에서 다음 사업장 선택 click이 no-op가 될 수 있다.
             main_page = await close_popups(context)
             if not main_page:
                 main_page = page
+            await reset_main_page(main_page)
             await human_delay(3)
 
             popup = await open_firm_selector(main_page, context)
@@ -398,14 +406,13 @@ async def run_auto_batch(page, context, *, firms, year, month, mgmts=None):
             _trace(f"[{i}/{len(targets)}] target='{firm_name}' mgmt='{mgmt}' "
                    f"-> page='{cur}' {'OK' if matched else 'MISMATCH'}")
             if not matched:
-                # 한 번 더: 메인 재해석 후 재검증 (탭 전환으로 메인 유실 대비)
-                main_page = await close_popups(context) or main_page
-                matched, cur = await _wait_firm_switched(main_page, firm_name, timeout_s=6)
-                log(f"  전환 재검증: 페이지='{cur}' / 기대='{firm_name}' "
-                    f"{'OK' if matched else 'MISMATCH'}")
-            if not matched:
-                log(f"  WARN: '{firm_name}' 전환 미반영 — 페이지='{cur}'. "
-                    f"워크플로우 진행하지만 자료가 다를 수 있음.")
+                # 잘못된 기본 사업장 PDF를 저장하는 것보다 이 건을 실패로 남기는
+                # 것이 안전하다. 다음 반복은 다시 retrieveMain에서 시작한다.
+                detail = f"페이지='{cur}' / 기대='{firm_name}'"
+                log(f"  ERROR: '{firm_name}' 전환 미반영 — {detail}. "
+                    "잘못된 사업장 자료 방지를 위해 이 수임처를 중단합니다.")
+                skipped.append({"name": firm_name, "reason": "전환실패", "detail": detail})
+                continue
 
             await human_delay(2)
             ok = await run_single_firm_workflow(main_page, context, firm_name,
@@ -424,6 +431,7 @@ async def run_auto_batch(page, context, *, firms, year, month, mgmts=None):
             skipped.append({"name": firm_name, "reason": "오류", "detail": str(e)})
             continue
     _emit_summary(len(targets), completed, skipped)
+    return completed == len(targets)
 
 
 async def main(args=None):
@@ -553,9 +561,8 @@ async def main(args=None):
                      if args.firms else None)
             mgmts = ([s.strip() for s in args.mgmts.split(",")]
                      if getattr(args, "mgmts", None) else None)
-            await run_auto_batch(page, context, firms=firms,
-                                 year=args.year, month=args.month, mgmts=mgmts)
-            return
+            return await run_auto_batch(page, context, firms=firms,
+                                        year=args.year, month=args.month, mgmts=mgmts)
 
         # Phase 2: 모드 선택
         log("실행 모드 선택:")
