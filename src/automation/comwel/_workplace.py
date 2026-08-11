@@ -30,14 +30,23 @@ def _normalize_mgmt_no(number: str) -> str:
     return re.sub(r"\D", "", number or "")
 
 
-async def reset_workplace_page(page):
-    """사업장 검색 기준 페이지로 리셋."""
+async def reset_workplace_page(page) -> bool:
+    """사업장 검색 기준 페이지로 리셋.
+
+    Returns:
+        bool: 메인 페이지 이동 요청이 정상 완료되었는지.
+
+    호출부가 실패 뒤 다음 수임처를 계속 처리할 수 있도록 예외는 여기서
+    삼키되, 복구 재시도를 결정할 수 있도록 성공 여부는 반환한다.
+    """
     from src.automation.comwel._constants import COMWEL_MAIN
     try:
         await page.goto(COMWEL_MAIN)
         await asyncio.sleep(2)
+        return True
     except Exception as e:
         log(f"  reset_workplace_page 실패: {e}")
+        return False
 
 
 async def _wait_popup_open(page, popup_id: str, timeout: int = POPUP_TIMEOUT_S) -> bool:

@@ -40,8 +40,10 @@ class ComwelEdiWorkflow(BaseWorkflow):
         from src.automation.comwel._common import (
             navigate_to_premium_20209, set_period,
             switch_workplace, search_main, dismiss_dialogs,
+            reset_workplace_page,
         )
         from src.automation.comwel._download import download_support_info_printout
+        from src.utils.log import log
         from src.utils.human import human_delay
 
         year = kwargs.get("year")
@@ -72,9 +74,37 @@ class ComwelEdiWorkflow(BaseWorkflow):
             state.before_step(job_id, "switch_workplace", 2)
             ok = await switch_workplace(page, client_name, management_number)
             if not ok:
-                state.fail_step(job_id, "switch_workplace",
-                                f"'{client_name}' 전환 실패")
-                return False
+                # 단독 GUI는 이전 선택건 실행의 20209 SPA 탭을 재사용한다. 입력란만
+                # 남아 있어 화면 진입을 생략한 뒤 사업장조회 팝업이 열리지 않는 경우,
+                # 로그인 세션은 유지하면서 메인→20209으로 한 번만 복구해 재시도한다.
+                log("  WARN: 사업장 전환 실패 — 20209 화면 복구 후 1회 재시도")
+                try:
+                    recovered = await reset_workplace_page(page)
+                    if recovered:
+                        recovered = await navigate_to_premium_20209(page)
+                    if recovered and year is not None and month is not None:
+                        recovered = await set_period(page, year, month)
+                except Exception as exc:
+                    recovered = False
+                    log(f"  WARN: 20209 화면 복구 실패 — 재시도 생략: {exc}")
+
+                if recovered:
+                    await human_delay(2)
+                    ok = await switch_workplace(page, client_name, management_number)
+                    if ok:
+                        log("  사업장 전환 재시도 성공")
+
+                if not ok:
+                    log("  WARN: 사업장 전환 재시도 실패 — 다음 실행을 위해 페이지 리셋")
+                    try:
+                        await reset_workplace_page(page)
+                    except Exception as exc:
+                        # 리셋의 일시 실패가 원래 전환 실패를 예외로 바꾸거나
+                        # 선택건 실행 흐름을 중단하면 안 된다.
+                        log(f"  WARN: 고용보험 페이지 리셋 실패 — 다음 실행 계속: {exc}")
+                    state.fail_step(job_id, "switch_workplace",
+                                    f"'{client_name}' 전환 실패")
+                    return False
             await human_delay(2)
             state.after_step(job_id, "switch_workplace")
 
