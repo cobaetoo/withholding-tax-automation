@@ -29,7 +29,7 @@ class NpsEdiWorkflow(BaseWorkflow):
         from src.automation.nps._common import (
             navigate_to_decision_details, open_decision_detail,
             switch_workplace, list_workplaces,
-            download_final_integrated,
+            download_final_integrated, reset_workplace_page,
         )
         # [롤백 참고] 3탭(가입자/소급/국고) 개별 PDF+엑셀 다운로드로 되돌리려면
         # process_tab_download, click_detail_tab, TAB_MEMBER/RETRO/GOVT 를
@@ -46,6 +46,16 @@ class NpsEdiWorkflow(BaseWorkflow):
             ok = await switch_workplace(page, client_name, management_number)
             if not ok:
                 state.fail_step(job_id, "switch_workplace", f"'{client_name}' 전환 실패")
+                # NPS의 "조회결과 없음" Nexacro alert/ChangeBusi 모달은 다른 PC의
+                # 백그라운드 창에서 닫히지 않아 다음 수임처를 막을 수 있다. 병렬
+                # run_auto_batch와 같은 페이지 리셋을 단독 실행에도 적용한다.
+                # 리셋 자체의 일시 실패가 원래의 미발견 건을 예외로 바꾸거나 다음
+                # 수임처 진행을 멈추면 안 되므로 best-effort로만 수행한다.
+                try:
+                    await reset_workplace_page(page)
+                except Exception as exc:
+                    from src.utils.log import log
+                    log(f"  WARN: NPS 페이지 리셋 실패 — 다음 수임처 계속: {exc}")
                 return False
             await human_delay(3)
             state.after_step(job_id, "switch_workplace")

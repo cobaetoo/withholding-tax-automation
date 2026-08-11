@@ -197,7 +197,7 @@ GUI 다중 러너보다 **CLI 2-프로세스**가 훨씬 가벼움:
 - (참고) CLI 진입점은 import 시 `sys.stdout.detach()` 재래핑을 해 pytest capture 를
   깨트리므로, 요약 로직은 stdout 재래핑 없는 `_parallel_report.py`로 분리해 테스트.
 
-### 9.4 NPS not-found 시 페이지 리셋 (멈춤 방지) ★
+### 9.4 NPS not-found 시 페이지 리셋 (병렬·단독 멈춤 방지) ★
 - NPS는 수임처 미발견 시 사업장전환 모달(`ChangeBusi`) + "조회결과 없음" Nexacro alert
   이 **백그라운드(occluded) 창에서 닫히지 않아** 다음 수임처 진행이 막히고 멈추던 버그.
   (NHIS는 HTML 팝업이라 `close_firm_popup`으로 매번 닫아 정상.)
@@ -208,7 +208,11 @@ GUI 다중 러너보다 **CLI 2-프로세스**가 훨씬 가벼움:
 - **해결: `_workplace.reset_workplace_page(page)` = `page.goto(NPS_URL)` +
   `wait_for_nexacro_ready`**. 네비게이션은 입력이벤트가 아니라 모달/alert/occlusion
   무관하게 강제 종료, 세션(쿠키) 유지로 재로그인 불필요(`ensure_login_page`/`main()` 패턴).
-  `run_auto_batch`의 모든 실패 경로(오픈실패/미발견/오류)에서 `continue` 전 호출.
+  병렬 `run_auto_batch`의 모든 실패 경로(오픈실패/미발견/오류)에서 `continue` 전 호출하고,
+  단독 `NpsEdiWorkflow`도 사업장 전환 실패 뒤 best-effort로 호출한 후 해당 건만 실패 처리한다.
+- **실기 검증(v1.1.11)**: 단독 국민연금 선택건 2건에서 첫 미발견 수임처가 실패한 뒤
+  `NPS 페이지 리셋(재로드)`과 Nexacro 준비 완료 로그를 남기고, 즉시 두 번째 수임처
+  `(2/2)` 처리로 진행함을 확인했다.
 - 교훈: Nexacro 모달의 **명시적 닫기는 신뢰 어려움 → 리로드 리셋이 가장 확실**.
   정상 선택은 그리드 행 dblclick의 사이드이펙트로 모달이 자동 닫히는 것에 의존.
 

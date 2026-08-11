@@ -492,6 +492,10 @@ HTTPS 연결만 읽기 전용으로 확인하며, 아직 열리지 않은 CDP �
 조회하지 않는다. 포트는 실제 병렬 실행 시 앱이 열고 검증한다. 새 PC 준비 절차는
 [`docs/parallel-edi-other-pc-setup.md`](docs/parallel-edi-other-pc-setup.md)를 따른다.
 
+국민연금 단독 EDI에서 수임처를 찾지 못하면 해당 건만 실패로 남긴다. v1.1.11부터는
+Nexacro의 사업장전환 모달·"조회결과 없음" 알림을 페이지 재로드로 정리한 뒤 다음
+수임처를 계속 처리한다. 따라서 미발견 수임처가 포함돼도 전체 선택건 실행이 멈추면 안 된다.
+
 ## 8. 데이터베이스 스키마
 
 SQLite (`data/withholding_tax.db`), FK 제약조건 활성화:
