@@ -90,5 +90,8 @@ simple_read.txt
 # dev 모드 updater 진단 로그 (APP_DATA_DIR=cwd → repo/logs/update.log)
 logs/
 
+# 강의용 독립 배포물 (별도 ZIP/강의 채널로만 전달)
+course-deliverables/
+
 # macOS
 .DS_Store
