@@ -219,28 +219,40 @@ async def run_swer0101(page, password, nts_folder="원천징수전자신고",
     log(f"  코드도움: {confirmed}")
     await asyncio.sleep(net_mult(2.0))
 
-    # [4] 제작(F4) 버튼 클릭 — Playwright real click (JS click skips disabled buttons)
+    # [4] 제작(F4) 버튼 클릭 — Playwright real click 우선(JS click 은 disabled 버튼도
+    #     눌러버림). ★JS 폴백은 반드시 "버튼 미발견"과 "클릭 실패" 양쪽을 덮어야 한다.
+    #     WSC_LUXDialog(_isDialog) 오버레이가 pointer-events 를 가로채면 버튼은
+    #     visible/enabled/stable 인데 click 만 5초 타임아웃으로 죽는다. 예전에는
+    #     except 가 로그만 찍고 끝나 F4 가 안 눌린 채 다음 단계로 넘어갔고, 20초 뒤
+    #     "모달 미출현 — 네트워크 지연 의심" 으로 오진됐다(실측 2026-08-19,
+    #     엘리야레포츠 원천전자신고). run_jitax_efile.py 의 동일 대응과 대칭 유지.
     log("[SWER0101] 제작(F4) 클릭...")
+    await dismiss_dialogs(page)
+    await asyncio.sleep(net_mult(0.5))
+    clicked_f4 = False
     try:
         f4_btn = page.locator('button.WSC_LUXButton:has-text("제작(F4)")')
         if await f4_btn.count() > 0:
             await f4_btn.first.click(timeout=5000)
+            clicked_f4 = True
             log("  clicked (Playwright)")
         else:
             log("  F4 button not found, trying JS fallback...")
-            clicked_f4 = await page.evaluate("""() => {
-                const all = document.querySelectorAll('button.WSC_LUXButton');
-                for (const btn of all) {
-                    if (btn.textContent.trim() === '제작(F4)') {
-                        const r = btn.getBoundingClientRect();
-                        if (r.y < 200 && r.width > 0) { btn.click(); return true; }
-                    }
-                }
-                return false;
-            }""")
-            log(f"  clicked (JS): {clicked_f4}")
     except Exception as e:
-        log(f"  Playwright click error: {e}")
+        log(f"  Playwright click 실패({type(e).__name__}) → 다이얼로그 정리 후 JS 폴백")
+        await dismiss_dialogs(page)
+    if not clicked_f4:
+        # offsetWidth > 0 만 확인 — 예전의 r.y < 200 은 스크롤/레이아웃 변화에
+        # 취약해 폴백이 조용히 실패하는 원인이었다(jitax 폴백과 동일 조건으로 통일).
+        clicked_f4 = await page.evaluate("""() => {
+            for (const btn of document.querySelectorAll('button.WSC_LUXButton')) {
+                if (btn.textContent.trim() === '제작(F4)' && btn.offsetWidth > 0) {
+                    btn.click(); return true;
+                }
+            }
+            return false;
+        }""")
+        log(f"  clicked (JS 폴백): {clicked_f4}")
 
     # [5] 모달 대기: 참고사항 vs 비밀번호
     log("[SWER0101] 모달 대기...")
@@ -273,8 +285,9 @@ async def run_swer0101(page, password, nts_folder="원천징수전자신고",
         # loud 실패로 처리한다(wehago_swer.py try/except → fail_step).
         raise RuntimeError(
             "[SWER0101] 제작(F4) 후 변환파일 비밀번호/참고사항 모달이 "
-            f"{_f4_polls}회 폴링 내 미출현 — 네트워크 지연 또는 F4 처리 실패 의심. "
-            "잡을 실패로 처리합니다."
+            f"{_f4_polls}회 폴링 내 미출현 (F4 클릭 성공={clicked_f4}) — "
+            "클릭 성공=False 면 오버레이 인터셉트/버튼 미발견, True 면 네트워크 "
+            "지연 또는 서버측 F4 처리 실패. 잡을 실패로 처리합니다."
         )
 
     # 비밀번호 모달 ready 대기
