@@ -109,36 +109,6 @@ def test_dismiss_noop_when_no_notice():
     click.assert_not_called()
 
 
-def test_search_skips_combo_when_already_mgmt():
-    clicks = []
-    page = MagicMock()
-
-    async def evaluate(script, *args, **kwargs):
-        if isinstance(script, str) and "textContent" in script:
-            return "사업장관리번호"
-        return True
-
-    page.evaluate = evaluate
-
-    async def click(_page, eid):
-        clicks.append(eid)
-        return {"ok": True}
-
-    with patch.object(wp, "dismiss_blocking_popups", new=AsyncMock(return_value=1)), \
-            patch.object(wp, "nexacro_click_button", new=click), \
-            patch.object(wp, "nexacro_wait_and_click", new=AsyncMock()) as wait_click, \
-            patch.object(wp, "nexacro_select_combo", new=AsyncMock()) as sel, \
-            patch.object(wp, "human_delay", new=AsyncMock()):
-        asyncio.run(wp._search_workplace_in_modal(
-            page, "51586017090", search_by_mgmt_no=True,
-        ))
-
-    wait_click.assert_not_called()
-    sel.assert_not_called()
-    assert any(eid.endswith(".btn00") for eid in clicks)
-    assert not any("dropbutton" in eid or "combolist" in eid for eid in clicks)
-
-
 def test_navigate_to_decision_dismisses_before_menu():
     order = []
 

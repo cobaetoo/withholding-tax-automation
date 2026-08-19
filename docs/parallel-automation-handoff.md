@@ -230,8 +230,14 @@ GUI 다중 러너보다 **CLI 2-프로세스**가 훨씬 가벼움:
   `wait_for_nexacro_ready`(로그인/리셋/모달 닫힘) · `navigate_to_decision_details` ·
   `open_decision_detail` 조회 전 · 병렬 `run_auto_batch` 수임처 루프 시작 ·
   `run_single_workplace` 결정내역 이동 전.
-- 실기: 단독 국민연금에서 공지 닫힘·사업장 전환 성공 확인. 콤보가 이미
-  '사업장관리번호'면 드롭다운 변경 생략.
+- 실기: 단독 국민연금에서 공지 닫힘·사업장 전환 성공 확인.
+- ★한때 함께 들어갔던 "콤보가 이미 '사업장관리번호'면 드롭다운 변경 생략"
+  최적화는 **철회**했다. `cbo00`의 textContent 에 combolist 항목 라벨이 모두
+  들어 있어 판별이 항상 참 → 콤보가 '사업장명'에 방치 → 관리번호 검색이 0건이
+  되고 이름 fallback 이 대신 성공해, **사업장 전환 성공 여부로는 드러나지 않는**
+  형태로 관리번호 정확일치 보호만 사라졌다. 콤보 클릭 타임아웃은 이 최적화가
+  아니라 `dismiss_blocking_popups` 가 근본 해결한다.
+  회귀 테스트: `tests/test_nps_search_combo.py`
 
 ---
 

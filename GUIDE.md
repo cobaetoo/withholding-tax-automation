@@ -111,8 +111,13 @@ Nexacro 기반 웹 프레임워크로 일반 DOM click이 동작하지 않음:
      클릭은 `nexacro_click`(dispatchEvent)만 사용 — 병렬에서 NPS 창이 가려지면
      `page.mouse.click`이 앞 창을 친다. 훅: `wait_for_nexacro_ready` · 결정내역 메뉴/조회 전 ·
      병렬 `run_auto_batch` 수임처 루프 · `run_single_workplace`.
-   - **사업장관리번호로 검색**: 콤보가 이미 "사업장관리번호"면 변경 생략. 아니면
-     콤보박스를 "사업장관리번호"(`item_1`)로 변경 후 숫자만 입력
+   - **사업장관리번호로 검색**: 콤보박스를 "사업장관리번호"(`item_1`)로 변경 후 숫자만 입력.
+     ★검색구분 콤보는 **조건 없이 매번** 설정한다 — "이미 원하는 값이면 생략"
+     최적화 금지. `cbo00`의 textContent 는 하위 combolist 항목 라벨('사업장명'·
+     '사업장관리번호')을 모두 포함해 부분문자열 비교가 항상 참이 되고, 콤보가
+     기본값 '사업장명'에 방치돼 관리번호 검색이 조용히 이름 검색으로 퇴화한다
+     (이름 fallback 이 대신 성공시켜 증상이 은폐됨). 회귀 테스트:
+     `tests/test_nps_search_combo.py`
    - 사업장 전환 → 결정내역 이동 → 사용자 설정 월의 결정내역 상세 진입
    - 가입자내역(`grdList2`), 소급분내역(`grdList3`), 국고지원내역(`grdList4`) 탭 순회
 4. Nexacro 이벤트: `dispatchEvent(new MouseEvent(...))` 로 mousedown → mouseup → click 순차 발생
