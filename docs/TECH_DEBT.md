@@ -3,14 +3,14 @@
 > **목적:** 원천징수세 자동화 프로젝트의 기술 부채·결함·로드맵을 **단일 진실표**로 통합 관리.
 > 산재해 있던 부채 관련 내용(핸드오프·도메인 PROGRESS·GUIDE 임베디드 리스크)을 한곳에서 우선순위화한다.
 >
-> **기준 시점:** 2026-08-07 · **버전:** `1.1.4` (`src/version.py`)
+> **기준 시점:** 2026-08-19 · **버전:** `1.1.12` (`src/version.py`) · **HEAD:** `6ef206c`
 > **관점:** GUI 프로그램(`gui_main.py` → `MainWindow` → Workers → Workflows → Automation → Utils → Chrome CDP) 기준.
 > 코드를 수정하기 전, 본 문서의 해당 항목과 [§1 산재 문서 관계]를 함께 읽을 것.
 >
 > **공단 EDI 병렬(v1.1.4 안정화 후 구조 백로그):**  
 > [parallel-edi-refactoring-backlog.md](parallel-edi-refactoring-backlog.md)  
 > (PE-P0~P2 · 금지구역 · Wave A–E. **지금 코드 리팩터 대상 아님** — 추후 별도 작업.  
-> 2026-08-07 재검증: 전 항목 VALID·항목 폐기/신규 없음 — 문서 문구 정밀화만.)
+> 2026-08-19 재검증(v1.1.12): **PE-P0-5 ✅** (`9c34613`). 나머지 PE 전부 VALID. 상세는 해당 문서 §8.)
 >
 > **세션 마무리(2026-07-25):** 옵션 A(TD-05·17·02·10) 완료·push. **Wave 3(옵션 B)는 보류**
 > (실행 경로 변경·골든 미캡처·파급 전 Phase — 위험 높음). 다음 구조 작업은
@@ -19,6 +19,9 @@
 > **⚠ 이 문서는 코드 상태를 스냅샷한 것이다.** 줄번호는 리팩토링으로 밀린다.
 > 항목을 착수하기 전 §9 변경 이력의 마지막 검증일과 현재 HEAD 를 대조하고,
 > 줄번호가 아니라 **함수명으로 먼저 찾을 것**.
+>
+> **2026-08-19 재검증 한 줄:** TD 상태 기호는 불변(해결 항목을 새로 닫지 않음).  
+> 정정은 규모·줄번호·포털 수·번들 크기. **유일한 닫힘**은 PE-P0-5(TD-19 포인터). 신규 TD 없음.
 
 ---
 
@@ -45,10 +48,10 @@
 |---|---|
 | `docs/refactoring-handoff.md` | **Wave 3**(engine↔runner)·**Wave 4**(메뉴정리). TD-02/05 데이터 결함은 2026-07-25 선조치됨 — Wave 3 본체는 여전히 **TD-04 / TD-13**. 골든 스냅샷 기법은 handoff가 원천. |
 | `docs/parallel-automation-handoff.md` | 병렬 안정화 이력·open items. 본 문서 **TD-07 / LV-4 / LV-5** 참조. |
-| `docs/parallel-edi-refactoring-backlog.md` | **v1.1.4 이후** 병렬 구조 리팩터 백로그만 (PE-*). TD-07 ↔ PE-P2-1 · **TD-19**. 2026-08-07 재검증 완료. 코드 착수 전 필수 열람. |
+| `docs/parallel-edi-refactoring-backlog.md` | **v1.1.4 이후** 병렬 구조 리팩터 백로그만 (PE-*). TD-07 ↔ PE-P2-1 · **TD-19**. 2026-08-19 재검증(v1.1.12): PE-P0-5 해결, 나머지 VALID. 코드 착수 전 필수 열람. |
 | `docs/parallel-first-run-investigation.md` | 신규 병렬 프로필의 보안모듈/주소창 없는 팝업 문제 조사·수정·테스트 기록. **LV-4**의 최신 세부 근거. |
 | `src/automation/wehago/PROGRESS.md` | 도메인 진행 + `## 다음 단계 TODO`(대부분 MVP 시절, 상당수 완료). 미완료만 **LV-5**로 인용. |
-| `src/automation/hometax/PROGRESS.md` | 제출 플로우 완료·라이브 검증(2026-07-17). **Phase 10 `enabled=True`**. 남은 TODO: 접수증 저장·신고내역 다운로드. ⚠ 포트 `9222` 오기 — TD-12. |
+| `src/automation/hometax/PROGRESS.md` | 제출 플로우 완료·라이브 검증(2026-07-17). **사이드바 Phase 12** (`hometax.py` `enabled=True`). 남은 TODO: 접수증 저장·신고내역 다운로드. ⚠ 포트 `9222` 오기 — TD-12. |
 | `src/automation/wetax/PROGRESS.md` | Phase 13 제출·다건·안전 가드 **완료**(2026-07-25). 구조 부채 아님. 제품 잔여: 오류 N건 정책·일괄목록/접수번호. |
 | `GUIDE.md` (§risk 계열) | 기술 문서 내 임베디드 리스크. 본 문서가 상위 레지스터. |
 
@@ -58,23 +61,23 @@
 
 | ID | Pri | 상태 | 카테고리 | 항목 | 위치 | 영향 | 검증 | 출처 |
 |---|---|---|---|---|---|---|---|---|
-| **TD-01** | 🔴 | ✅ | 빌드 | ~~installer_output/ 정합성 깨짐~~ → **해결**: 해시 계산 후 동일 파일을 ASCII명으로 복사하는 순서 보장 | `release.py:118-123,158-161` | — | 🔍 | 사용자 |
+| **TD-01** | 🔴 | ✅ | 빌드 | ~~installer_output/ 정합성 깨짐~~ → **해결**: 해시 계산 후 동일 파일을 ASCII명으로 복사하는 순서 보장 | `release.py:126-131,166-169` | — | 🔍 | 사용자 |
 | **TD-02** | 🔴 | ✅ | 런타임결함 | ~~`_reset_batch` 전 wipe~~ → **해결**: running/paused→crashed, completed/archived만 삭제, crashed/created 유지 | `automation_runner._reset_batch` | 크래시 배치 prepare_batch 재사용 가능 | 🔍 | 분석 |
-| **TD-03** | 🔴 | ⬜ | 구조 | `db.py` 1,210줄 — Repository 4개 CRUD 반복 + duration 계산 3곳 중복 + 카운터 동기화 2방식 혼재 | `src/batch/db.py:857,905,1107` | 유지보수성, 카운터 불일치 위험 | 🔍 | 둘 다 |
-| **TD-04** | 🔴 | ⬜ | 구조 | `automation_runner.py` 1,239줄 — Playwright 생명주기 + 5포털 로그인 + 엔진 연동 + 브라우저 복구 혼재 | `src/ui/workers/automation_runner.py` | 책임 분리 필요 (Wave 3 영역) | 🔍 | 사용자 |
+| **TD-03** | 🔴 | ⬜ | 구조 | `db.py` 1,228줄 — Repository 4개 CRUD 반복 + duration 계산 3곳 중복 + 카운터 동기화 2방식 혼재 | `src/batch/db.py:881,929,1131` | 유지보수성, 카운터 불일치 위험 | 🔍 | 둘 다 |
+| **TD-04** | 🔴 | ⬜ | 구조 | `automation_runner.py` 1,344줄 — Playwright 생명주기 + **6포털** 로그인 + 엔진 연동 + 브라우저 복구 혼재 | `src/ui/workers/automation_runner.py` | 책임 분리 필요 (Wave 3 영역) | 🔍 | 사용자 |
 | **TD-05** | 🔴 | ✅ | 데이터결함 | ~~`DELETE FROM clients` WHERE 없음~~ → **해결**: `WHERE portal=?` + override 스냅샷도 portal 스코프 | `ClientRepository.replace_clients_preserving_mgmt` | 타 포털 수임처 보호 | 🔍 | 둘 다 |
-| **TD-06** | 🟡 | ⬜ | 구조 | MainWindow **1,124줄** + UI↔DB 직결 (raw `sqlite3` + Repository **3종** 직접 호출) | `src/ui/main_window.py:422,522,525,797,810,825-830` | 계층 분리 약화 | 🔍 | 둘 다 |
+| **TD-06** | 🟡 | ⬜ | 구조 | MainWindow **1,639줄** + UI↔DB 직결 (raw `sqlite3` + Repository **3종** 직접 호출). 병렬 UI·사전점검이 비대를 가속 | `src/ui/main_window.py:545,891,1280,1293,1311-1321` | 계층 분리 약화 | 🔍 | 둘 다 |
 | **TD-07** | 🟡 | ⬜ | 런타임 | 병렬(Phase 2)이 SQLite 영속상태 미사용 → 체크포인트·재시도 불가 | `parallel_cli_worker` + `_parallel_report` · 상세 백로그 **PE-P2-1** | 크래시 시 result_summary 1회성만, 복구 불가 | 🔍 | 분석 |
-| **TD-19** | 🟢 | ⬜ | 구조·문서 | 공단 EDI 병렬 안정화(v1.1.4) 후 구조 부채 일괄 추적 | [parallel-edi-refactoring-backlog.md](parallel-edi-refactoring-backlog.md) | 추후 Wave A–E; 금지구역 준수. 2026-08-07 코드 재검증·문서 정밀화(항목 변경 없음) | 🔍 | 분석 |
-| **TD-08** | 🟡 | ⬜ | correctness | `Portal` enum에 `COMWEL_EDI` 누락 — 다만 **현재 `Portal()` 호출부 0곳이라 잠재 위험** | `src/batch/models.py:18-33` | 향후 enum 사용 시 ValueError, `display_name` 미표시 | 🔍 | 분석 |
+| **TD-19** | 🟢 | ⬜ | 구조·문서 | 공단 EDI 병렬 안정화(v1.1.4) 후 구조 부채 일괄 추적 | [parallel-edi-refactoring-backlog.md](parallel-edi-refactoring-backlog.md) | 추후 Wave A–E; 금지구역 준수. 2026-08-19 재검증: PE-P0-5 ✅, 나머지 VALID | 🔍 | 분석 |
+| **TD-08** | 🟡 | ⬜ | correctness | `Portal` enum에 `COMWEL_EDI` 누락 (`WETAX` 는 추가됨). **`Portal()` 호출부 0곳이라 잠재 위험** | `src/batch/models.py:18-35` | 향후 enum 사용 시 ValueError, `display_name` 미표시 | 🔍 | 분석 |
 | **TD-09** | 🟡 | ⬜ | 구조 | `auth.py`가 `src.ui.resources.auth_config` 역참조 (utils→ui) | `src/utils/auth.py:18` | 계층 의존 방향 위반 (역방향 간선) | 🔍 | 분석 |
 | **TD-10** | 🟡 | ✅ | correctness | ~~포털 필터 없음~~ → **해결**: `mark_crashed_as_recoverable(portal=)` + engine.initialize 전달 | `BatchRepository.mark_crashed_as_recoverable` | 타 포털 running 배치 보호 | 🔍 | 분석 |
-| **TD-11** | 🟡 | ⬜ | 빌드 | Qt6 네이티브 DLL 잔존(Multimedia/Qml/Quick/Pdf) — Python 바인딩만 exclude | `build.py:31-50` | 번들 383MB (목표 315MB) | 🔍 | 사용자 |
+| **TD-11** | 🟡 | ⬜ | 빌드 | Qt6 네이티브 DLL 잔존(Multimedia/Qml/Quick/Pdf) — Python 바인딩만 exclude | `build.py:31-50` | 번들 **387MB** (406,342,309 B, 목표 315MB) | 🔍 | 사용자 |
 | **TD-12** | 🟡 | ⬜ | 문서 | 문서 노후/중복 — PRD(MVP), `wehago_automation_guide.md`(폐기 대상), hometax PROGRESS 포트 오기, 사용자 가이드 3종 중복 | 다수 | 신규 작업자 혼란, 포트 오판 | 🔍 | 둘 다 |
 | **TD-13** | 🟡 | ⬜ | 구조·문서 | `engine.run()` 프로덕션 데드코드(러너가 인라인 재구현) + `run_single` 시그니처 문서 오기 | `src/batch/engine.py` / `src/workflows/base.py:37-40` | Wave 3 통합 영역, 문서-코드 불일치 | 🔍 | 분석 |
-| **TD-14** | 🟢 | ⬜ | 레거시 | `sys.path.insert(0, PROJECT_ROOT)` 남발 (**50+곳**, 패키지 코드 내부 포함) | `_*.py` · `src/automation/*/` · `tests/` | 패키지 정비 시 제거 가능 | 🔍 | 사용자 |
+| **TD-14** | 🟢 | ⬜ | 레거시 | `sys.path.insert` 남발 (**50곳 / 49파일**, 패키지 코드 내부 포함) | `_*.py` · `src/automation/*/` · `tests/` | 패키지 정비 시 제거 가능 | 🔍 | 사용자 |
 | **TD-15** | 🟢 | ⬜ | 로깅 | `print()` 기반 로깅 (`logging` 미사용) — `engine.py` 26곳 | `src/batch/engine.py` 등 | 파일 로깅/레벨 제어 불가 | 🔍 | 사용자 |
-| **TD-16** | 🟢 | ⬜ | 데드코드 | `VerificationDialog` **완전 미사용** + 포털 호스트 dict 중복 (**위치는 runner**) | `src/ui/widgets/settings_dialog.py` · `src/ui/workers/automation_runner.py:746-752,832-838` | 정리 필요 | 🔍 | 사용자 |
+| **TD-16** | 🟢 | ⬜ | 데드코드 | `VerificationDialog` **완전 미사용** + 포털 호스트 dict 중복 (**위치는 runner**, wetax 포함 6키) | `src/ui/widgets/settings_dialog.py` · `src/ui/workers/automation_runner.py:768-775,855-862` | 정리 필요 | 🔍 | 사용자 |
 | **TD-18** | 🔴 | ✅ | 런타임결함 | ~~만료·미인증 상태에서 자동 업데이트 도달 불가~~ → **해결**(`f0980e9`): 만료 게이트에서 확인→다운로드→무인설치 경로 제공 | `gui_main._run_expiry_update_gate` · `updater.should_offer_expiry_update/should_install_downloaded` | 만료 시 사용자가 새 버전을 받을 자동 경로 확보 (시한 `BETA_EXPIRES=2026-12-31`) | 🔍 ⚠라이브 미검증(LV-6) | 분석 |
 | **TD-17** | 🟡 | 🟦 | 데이터결함 | 무스코프 clients DELETE 3경로 — **db+runner list 분기 해결**. main “모두 삭제”는 의도 UX 유지 | `main_window._on_delete_all_clients` | 사용자 확인 후 전체 삭제 (고지 있음) | 🔍 | 분석 |
 
@@ -85,11 +88,11 @@
 ## 3. HIGH 상세
 
 ### TD-01 — installer_output/ 정합성 ✅ 해결 [빌드] 🔍
-- **해결 근거(2026-07-20 v1.0.5 배포로 라이브 확인):** `release.py` 가 **해시를 먼저 계산하고 그 다음 복사**한다.
-  - `release.py:34` `INSTALLER = installer_output/원천징수자동화_설치.exe`
-  - `release.py:40` `ASSET_NAME = "whta_setup.exe"` (gh CLI/urllib 의 비ASCII 처리 문제 회피)
-  - `release.py:118-123` — `size`/`sha256` 를 `INSTALLER` 기준으로 계산 → `version.json` 기록
-  - `release.py:158-161` — `--publish` 시 `shutil.copyfile(INSTALLER, upload_file)` 로 **방금 해시한 그 파일**을 ASCII명으로 복사
+- **해결 근거(2026-07-20 v1.0.5 배포로 라이브 확인):** `release.py` 가 **해시를 먼저 계산하고 그 다음 복사**한다. (2026-08-19 줄번호 재확인)
+  - `release.py:42` `INSTALLER = installer_output/원천징수자동화_설치.exe`
+  - `release.py:48` `ASSET_NAME = "whta_setup.exe"` (gh CLI/urllib 의 비ASCII 처리 문제 회피)
+  - `release.py:126-131` — `size`/`sha256` 를 `INSTALLER` 기준으로 계산 → `version.json` 기록
+  - `release.py:166-169` — `--publish` 시 `shutil.copyfile(INSTALLER, upload_file)` 로 **방금 해시한 그 파일**을 ASCII명으로 복사
   - 순서상 해시 대상과 업로드 대상이 동일 바이트임이 구조적으로 보장된다.
 - **라이브 확인:** v1.0.5 배포에서 `whta_setup.exe` / `원천징수자동화_설치.exe` / `version.json` 세 곳의 sha256 `86d64528…` 및 size `166036289` 3중 일치 확인.
 - **잔여(무해):** `installer_output/원천징수자동화_설치_v1.0.3_20260703.exe` 구파일이 남아 있으나 파이프라인이 참조하지 않음. 정리는 선택.
@@ -103,19 +106,20 @@
 - **잔여(Wave 3):** runner 인라인 잡 루프 vs `engine.run` 통합·partial step 리셋은 별도(TD-04/13).
 - **검증:** `tests/test_batch_portal_scope.py`.
 
-### TD-03 — db.py 1,210줄 과대 + 내부 중복 🔴 [구조] 🔍
-- **현상:** `src/batch/db.py` 1,210줄. Repository 4개 — `ClientRepository:293` / `BatchRepository:484` / `JobRepository:691` / `StepRepository:1034`.
-- **duration 중복 3곳(바이트 동일 블록):** `:857-863`(job 완료) · `:905-911`(job 갱신) · `:1107-1113`(step 완료)
+### TD-03 — db.py 1,228줄 과대 + 내부 중복 🔴 [구조] 🔍
+- **현상:** `src/batch/db.py` 1,228줄 (2026-08-19). Repository 4개 — `ClientRepository:293` / `BatchRepository:488` / `JobRepository:709` / `StepRepository:1052`.
+- **duration 중복 3곳(바이트 동일 블록):** `:875-883`(job 완료) · `:923-931`(job 갱신) · `:1125-1133`(step 완료)
   ```python
   t1 = _dt.strptime(now, "%Y-%m-%d %H:%M:%S")
   t2 = _dt.strptime(started, "%Y-%m-%d %H:%M:%S")
   duration = (t1 - t2).total_seconds()
   ```
-- **카운터 동기화 2방식 혼재:** 증분식 `increment_counts()` `:578-592` + job 완료 경로의 **인라인 중복** `:880-885` ↔ 전량 재계산 `_recalculate_batch_counts()` `:995-1005`(재시도 리셋 경로 `:763` 에서 호출).
+- **카운터 동기화 2방식 혼재:** `increment_counts()` `:582` 는 **정의만 있고 호출 0건**(사실상 데드). 실제 증분은 job 완료/실패 경로의 **인라인 SQL** ↔ 전량 재계산 `_recalculate_batch_counts()` `:1013`(재시도 리셋에서 호출).
 - **수정 방향:** `_compute_duration(start, end)` 헬퍼 추출, Repository mixin 또는 분할, 카운터를 한 방식으로 통일. **동작 보존 필수.**
 
-### TD-04 — automation_runner.py 1,239줄 다중 책임 🔴 [구조] 🔍
-- **현상:** 한 클래스에 혼재 — 브라우저 생명주기 `_ensure_browser:718`/`_disconnect_browser:485`, 5포털 로그인 대기 `_wait_for_login_nhis:929`/`_nps:977`/`_comwel:1017`/`_hometax:1080`/`_wehago:1139`, 배치 구동 `_handle_run_phase:136-341`, 브라우저 복구 `_handle_browser_disconnect:443-476`/`_try_reuse_browser:812-826`/`_reconnect_page:828-875`, 단발 phase `_handle_refresh_clients:343-441`.
+### TD-04 — automation_runner.py 1,344줄 다중 책임 🔴 [구조] 🔍
+- **현상:** 한 클래스에 혼재 — 브라우저 생명주기 `_ensure_browser:740`/`_disconnect_browser:485`, **6포털** 로그인 대기 `_wait_for_login_nhis:954`/`_nps:1002`/`_comwel:1042`/`_hometax:1105`/`_wetax:1164`/`_wehago:1244`, 배치 구동 `_handle_run_phase:136-341`, 브라우저 복구 `_handle_browser_disconnect:443-476`/`_try_reuse_browser:835-849`/`_reconnect_page:851`, 단발 phase `_handle_refresh_clients:343-441`.
+- **2026-08-19:** 위택스 로그인 대기가 추가되어 줄 수가 1,239→1,344. 책임 혼재 자체는 그대로.
 - **수정 방향:** Wave 3 — 브라우저 세션 관리 / 로그인 대기 / 배치 구동 분리. TD-02·TD-13 과 동일 영역이므로 함께.
 
 ### TD-05 — `DELETE FROM clients` WHERE 없음 (전 포털 wipe) ✅ 해결 [데이터결함] 🔍
@@ -140,34 +144,37 @@
 
 ## 4. MED 상세
 
-- **TD-06** `src/ui/main_window.py` **1,124줄**. Repository 직접 인스턴스화 `ClientRepository:422,797,810` / `StepRepository:522` / `JobRepository:525` + raw `sqlite3` 블록 `:825-830`. ViewModel/Service 계층 도입으로 UI↔DB 분리. 🔍
-  > **정정(2026-07-20):** 이전 판의 "1,077줄 / Repository 4개"는 부정확. 실제 1,124줄이고 `BatchRepository` 는 여기서 쓰이지 않아 **3종**이다.
+- **TD-06** `src/ui/main_window.py` **1,639줄** (2026-08-19; 이전 기록 1,124). Repository 직접 인스턴스화 `ClientRepository:545,1280,1293` / `StepRepository:891` / `JobRepository:891` + raw `sqlite3` 블록 `:1311-1321` (`_on_delete_all_clients`). `BatchRepository` 는 여전히 미사용(**3종**). 병렬 사전점검·결과 모달이 비대를 가속. ViewModel/Service 계층 도입으로 UI↔DB 분리. 🔍
+  > **정정(2026-07-20):** 이전 판의 "1,077줄 / Repository 4개"는 부정확했다.
+  > **정정(2026-08-19):** 1,124→1,639. 호출 줄번호 전면 갱신.
 - **TD-07** 병렬(Phase 2)은 subprocess CLI + `__WTAX_RESULT__` result_summary 1회성 반환만. 두 파일 모두 `sqlite3`/`BatchDB`/Repository 참조 **0건** 확인 → 병렬 크래시 시 재개 불가(직렬 러너 경로와 비대칭). 🔍
   > **정정(2026-07-20):** 현재 병렬은 **3개 CLI**(NPS/NHIS/COMWEL, 포트 9223/9224/9225)다.
-- **TD-08** `src/batch/models.py:18-33` `Portal` = WEHAGO/NHIS_EDI/NPS_EDI/HOMETAX. `COMWEL_EDI` 없음. 🔍
+- **TD-08** `src/batch/models.py:18-35` `Portal` = WEHAGO/NHIS_EDI/NPS_EDI/HOMETAX/**WETAX**. `COMWEL_EDI` 없음. 🔍
   > **정정(2026-07-20) — 두 가지:**
   > ① **"즉시 위험"이 아니다.** 리포 전체에 `Portal(...)` 생성자 호출부가 **0곳**이다(정의부 제외). 모든 포털 디스패치가 평문 문자열 키를 쓴다 → ValueError 는 **잠재 위험**이지 현재 발생하는 버그가 아니다.
-  > ② **"1줄 수정"이 아니다.** enum 멤버 추가 + `display_name` 의 `names` dict 에 `"comwel_edi": "근로복지공단 EDI"` 추가로 **최소 2곳**. (`PORTAL_URLS` 는 `src/config.py:38` 에 이미 있음.)
-  > `comwel_edi` 문자열 사용처: `src/config.py:38`, `src/workflows/comwel_edi.py:23`, `src/ui/workers/automation_runner.py:749,835,923,1068`, `build.py:176`.
+  > ② **"1줄 수정"이 아니다.** enum 멤버 추가 + `display_name` 의 `names` dict 에 `"comwel_edi": "근로복지공단 EDI"` 추가로 **최소 2곳**. (`PORTAL_URLS` 는 `src/config.py` 에 이미 있음.)
+  > **정정(2026-08-19):** `WETAX = "wetax"` 멤버·표시명은 추가됨. `COMWEL_EDI` 만 누락. `Portal()` 호출부는 여전히 0곳.
+  > `comwel_edi` 문자열 사용처: `src/config.py`, `src/workflows/comwel_edi.py`, `src/ui/workers/automation_runner.py` (portal_host 6키), `build.py`.
 - **TD-09** `src/utils/auth.py:18` → `from src.ui.resources.auth_config import (AUTH_GRACE_PERIOD_DAYS, BETA_EXPIRES, SUPABASE_ANON_KEY, SUPABASE_URL)`. utils 계층이 ui 계층을 역참조(순환 위험). 상수를 `src/config.py` 등 비-UI 위치로 이동. 🔍
 - **TD-10** ✅ `mark_crashed_as_recoverable(portal=)` 추가, `engine.initialize` 가 자기 portal 만 전달. 🔍
-- **TD-11** `_QT_EXCLUDE_MODULES`(`build.py:31-50`)가 `PySide6.*` **Python 바인딩만** exclude → 네이티브 DLL 잔존 확인: `dist/원천징수자동화/_internal/PySide6/` 에 `Qt6Multimedia.dll`, `Qt6Pdf.dll`, `Qt6Qml*.dll`, `Qt6Quick*.dll`(Quick3D 포함) 존재. 실측 **398,135,505 B (383MB)**, 목표 315MB. PyInstaller exclude 로는 불가 → **post-build DLL 제거 스크립트** 필요. 🔍
+- **TD-11** `_QT_EXCLUDE_MODULES`(`build.py:31-50`)가 `PySide6.*` **Python 바인딩만** exclude → 네이티브 DLL 잔존 확인(2026-08-19): `dist/원천징수자동화/_internal/PySide6/` 에 `Qt6Multimedia.dll`, `Qt6Pdf.dll`, `Qt6Qml*.dll`, `Qt6Quick*.dll`(Quick3D 포함) 존재. 실측 **406,342,309 B (387MB)**, 목표 315MB. 이전 기록 383MB보다 소폭 증가(Cython .pyd·기능 누적). PyInstaller exclude 로는 불가 → **post-build DLL 제거 스크립트** 필요. 🔍
 - **TD-12** 잔존 문서 정리. 🔍
-  > **정정(2026-07-20):** 루트 `PROGRESS.md` 는 **더 이상 없다**(도메인별 중첩본만 존재). 포트 오기의 실제 위치는 `src/automation/hometax/PROGRESS.md:8`(`9222`)과 `wehago_automation_guide.md:197,205,214,1258`. 실제값은 `src/utils/chrome_cdp.py:16` `CDP_PORT=9223`.
+  > **정정(2026-07-20):** 루트 `PROGRESS.md` 는 **더 이상 없다**(도메인별 중첩본만 존재). 포트 오기의 실제 위치는 `src/automation/hometax/PROGRESS.md:8`(`9222`)과 `wehago_automation_guide.md:197,205,214,1258`. 실제값은 `src/utils/chrome_cdp.py:24` `CDP_PORT=9223`.
   > **`GEMINI.md` 는 포트에 관해선 정확하다** — 상단에 자체 정확성 경고 배너가 있고 "CDP 포트: 9223(9222 사용 금지)"를 명시. 다만 NHIS 섹션 구식은 그대로(문서 자체가 인정).
-  > 잔존: `PRD.md`(MVP), `wehago_automation_guide.md`(canvas 전제 — 폐기 대상), 사용자 가이드 3종 중복(`USER_GUIDE.md` / `docs/user-guide.md` / `docs/설치안내서.md`).
-- **TD-13** `engine.run()` 프로덕션 데드코드 확인 — 호출부는 `tests/test_engine.py:35,49,64,88,97` **테스트 전용**. 러너 `_handle_run_phase` 가 동일 루프를 `src/ui/workers/automation_runner.py:241-316` 에 인라인 재구현(= `BatchEngine._run_job`/`run` `src/batch/engine.py:181-296` 중복). `tests/test_engine.py:3-4` 주석이 "Wave 3 에서 runner 가 engine.run() 을 호출하게 만들 때 동작 보존" 목적임을 명시 → **테스트는 보존 자산이니 삭제 금지.**
-  시그니처 실제값 `src/workflows/base.py:37-40` = `(self, page, context, client_name: str, job_id: int, state: StateManager, **kwargs)`. 오기 위치: `src/batch/engine.py:28` 주석, `src/workflows/base.py:59` docstring(둘 다 `(page, context, job, state_manager)`). 🔍
+  > 잔존: `PRD.md`(MVP), `wehago_automation_guide.md`(canvas 전제 — 폐기 대상), 사용자 가이드 3종 중복(`USER_GUIDE.md` / `docs/user-guide.md` / `docs/설치안내서.md`). `email-receipt-design.md` 는 아직 “Phase 11=메일”인데 코드상 11=지방세전자신고·12=홈택스·13=위택스.
+- **TD-13** `engine.run()` 프로덕션 데드코드 확인(2026-08-19 재확인) — 호출부는 `tests/test_engine.py` **테스트 전용**. 러너 `_handle_run_phase` 가 동일 루프를 `src/ui/workers/automation_runner.py:241-` 에 인라인 재구현(= `BatchEngine._run_job`/`run` `src/batch/engine.py:181-`). `tests/test_engine.py:3-4` 주석이 "Wave 3 에서 runner 가 engine.run() 을 호출하게 만들 때 동작 보존" 목적임을 명시 → **테스트는 보존 자산이니 삭제 금지.**
+  시그니처 실제값 `src/workflows/base.py:37-40` = `(self, page, context, client_name: str, job_id: int, state: StateManager, **kwargs)`. 오기 위치: `src/batch/engine.py:29` 주석, `src/workflows/base.py:59` docstring(둘 다 `(page, context, job, state_manager)`). 🔍
 
 ---
 
 ## 5. LOW
 
-- **TD-14** `sys.path.insert(0, PROJECT_ROOT)` **50+곳**. `debug/*.py`, 루트 `_*.py`, `main.py:22`, `release.py:29`, `gui_main.py:103,141`, `scripts/*.py`, `tests/conftest.py` 뿐 아니라 **패키지 코드 내부**(`src/automation/{comwel,hometax,nhis,nps}/*_common*.py`, `*_auto_cdp.py`)에도 존재. 패키지 구조 정비 시 제거. 🔍
+- **TD-14** `sys.path.insert` **50곳 / 49파일** (2026-08-19). `src/` 18 · 루트 `_*.py` 11 · `scripts/` 9 · `tests/` 6 · `tools/` 2 · `main.py:22` · `release.py:37` · `gui_main.py:159,474`. **`debug/` 는 0건.** 패키지 코드 내부(`src/automation/{comwel,hometax,nhis,nps,wehago}/*`)에도 존재. 패키지 구조 정비 시 제거. 🔍
 - **TD-15** `src/batch/engine.py` 에 `print()` **26곳**, `import logging` 없음. 🔍
-  > ⚠ **`src/utils/log.py`(56줄) 의 듀얼패스는 의도적 설계이며 정상 상태 확인됨.** callback 설정 시 `sys.__stdout__` 로만 미러하고 조기 return 하는 구조로, GUI 로그 2배 중복을 막는다. print→logging 마이그레이션 시 **이 파일은 건드리지 말 것**(회귀 이력 있음).
+  > ⚠ **`src/utils/log.py` 의 듀얼패스는 의도적 설계이며 정상 상태 확인됨.** callback 설정 시 `sys.__stdout__` 로만 미러하고 조기 return 하는 구조로, GUI 로그 2배 중복을 막는다. print→logging 마이그레이션 시 **이 파일은 건드리지 말 것**(회귀 이력 있음).
 - **TD-16** `src/ui/widgets/settings_dialog.py`(65줄)의 `VerificationDialog` — 리포 전체에 인스턴스화·import **0건**(유일한 언급은 `src/ui/widgets/login_dialog.py:3` 의 주석). **완전 데드코드.** 🔍
-  > **정정(2026-07-20):** 포털 호스트 dict 중복의 위치는 `settings_dialog.py` 가 아니라 `src/ui/workers/automation_runner.py:746-752` 와 `:832-838`(동일 블록 2벌).
+  > **정정(2026-07-20):** 포털 호스트 dict 중복의 위치는 `settings_dialog.py` 가 아니라 runner.
+  > **정정(2026-08-19):** 동일 블록 2벌이 `:768-775`(`_ensure_browser`)와 `:855-862`(`_reconnect_page`)로 이동했고, `wetax` 키가 추가되어 6포털.
 
 ---
 
@@ -191,12 +198,12 @@
 
 | ID | 항목 | 위치 | 비고 |
 |---|---|---|---|
-| **LV-1** | NPS 국고지원금 col24 분기 등가 가정(통합엑셀 경로 vs 구 govt 엑셀 //2) | `src/utils/data_merger.py:301-327` | 수식 col10+col16−col24. 마지막 실질 수정 `b5e488b`(2026-06-14) — 이후 라이브 확인 근거 없음 |
-| **LV-2** | Defender 무서명 빌드 스모크 1·2단계 (0x800700E1 오탐 회귀) | `build.py:247-` `verify_bundle()` | ⚠ `verify_bundle()` 은 **정적 번들 완전성 검사일 뿐** 실기기 Defender 스모크가 아님. 실기기 게이트는 여전히 수동·미코드화. v1.0.5 도 무서명·무스캔 출하됨. ★소스 보호(Cython) 도입으로 `_internal/src` 에 **.pyd 65개 추가**→"느슨한 네이티브 바이너리" 휴리스틱 표면 증가. 첫 보호 릴리스는 VT+실기기 Defender 풀스캔 필수(`RELEASE.md` 소스 보호 섹션 참조) |
-| **LV-3** | EI v3 조정분(adjustment==0 → 0.9% 보존 자동산정) | `src/utils/data_merger.py:330-366` | 🟦 **부분 해소 가능** — `cfb501c`(2026-07-19) 가 라이브 실측으로 부호규칙을 정정했고 docstring 이 이를 명시. 단 `adjustment==0` 분기 자체가 그 테스트에 포함됐는지는 미확인 |
-| **LV-4** | 병렬 신규 프로필 최초 실행(보안프로그램/주소창 없는 팝업) | `ParallelCliRunner`, `chrome_cdp` | 순차 bootstrap·준비 마커·포털 탭 선택·CDP 단절 실패 처리를 구현하고 자동 회귀·보호 빌드까지 통과. 새 설치 환경의 실제 보안모듈 스모크는 대기 — [조사 기록](parallel-first-run-investigation.md) 참조. |
-| **LV-5** | 병렬 → WEHAGO 급여자료입력 E2E(공단EDI raw → SWSA 반영) | `src/workflows/wehago_swsa.py:207-227` | 마지막 관련 수정 `594ad22`(2026-07-05)는 버그픽스이지 E2E 확인이 아님. handoff §16.3 권장 |
-| **LV-6** | **만료 게이트 자동 업데이트 빌드 스모크**(TD-18) | `gui_main._run_expiry_update_gate` | 게이트가 `sys.frozen` 에서만 동작 → dev 실행으로는 경로 자체가 안 탄다. **절차:** ①`BETA_EXPIRES` 과거 날짜로 조작한 **테스트 전용 빌드**(배포 금지, 검증 후 원복) ②설치·실행 시 만료 안내 대신 "새 버전 v… 설치하시겠습니까?" 표시 ③지금 업데이트→진행률→종료→무인설치→**자동 재실행** ④취소 시 창 유지 + 만료 안내(F1) ⑤랜선 분리 시 **20초 내** 만료 안내(F3 워치독) ⑥`%LOCALAPPDATA%\원천징수자동화-data\logs\update.log` 에 `expiry-gate:` 기록 대조. ③④는 `tools/verify_auto_update.py` 로 자동화 가능, ②⑤는 수동. **LV-2 와 같은 빌드 사이클에서 함께 소화할 것** |
+| **LV-1** | NPS 국고지원금 col24 분기 등가 가정(통합엑셀 경로 vs 구 govt 엑셀 //2) | `src/utils/data_merger.py:301-327` (`_apply_nps_row`) | 적용은 `base -= abs(govt_amount)`. col24 해석은 reader 주석(`:128`)에만. 마지막 실질 수정 `b5e488b`(2026-06-14) — 이후 라이브 확인 근거 없음 |
+| **LV-2** | Defender 무서명 빌드 스모크 1·2단계 (0x800700E1 오탐 회귀) | `build.py:247-` `verify_bundle()` | ⚠ `verify_bundle()` 은 **정적 번들 완전성 검사일 뿐** 실기기 Defender 스모크가 아님. `installer.iss` 에 SignTool **없음**. 실기기 게이트는 여전히 수동·미코드화. ★소스 보호(Cython): `dist/_internal/src` **`.pyd` 74개**(이전 기록 65). TD-11 번들 387MB. |
+| **LV-3** | EI 조정분(`adjustment==0` 이면 셀 미기록) | `src/utils/data_merger.py:330-366` (`_apply_ei_row`) | 🟦 부호규칙 docstring 은 2026-07-19 라이브 실측을 반영. **`adjustment == 0` 분기를 직접 단언하는 pytest는 0건** (2026-08-19). |
+| **LV-4** | 병렬 신규 프로필 최초 실행(보안프로그램/주소창 없는 팝업) | `ParallelCliRunner`, `chrome_cdp`, `parallel_preflight` | 순차 bootstrap·준비 마커·포털 탭 선택·CDP 단절 실패·**사전점검(HTTPS only, CDP 미오픈, `afd63c9`)** 을 구현하고 자동 회귀까지 통과. 새 설치 환경의 실제 보안모듈 스모크는 대기 — [조사 기록](parallel-first-run-investigation.md) 참조. |
+| **LV-5** | 병렬 → WEHAGO 급여자료입력 E2E(공단EDI raw → SWSA 반영) | `src/workflows/wehago_swsa.py` `_resolve_insurance_dir` / `_locate_raw_data` | 단독→병렬 폴백 경로 코드는 존재. 공단 raw → SWSA 반영 **E2E 라이브 근거는 여전히 없음**. |
+| **LV-6** | **만료 게이트 자동 업데이트 빌드 스모크**(TD-18) | `gui_main._run_expiry_update_gate` | 게이트가 `sys.frozen` 에서만 동작 → dev 실행으로는 경로 자체가 안 탄다. `BETA_EXPIRES=2026-12-31`. **절차:** ①`BETA_EXPIRES` 과거 날짜로 조작한 **테스트 전용 빌드**(배포 금지, 검증 후 원복) ②설치·실행 시 만료 안내 대신 "새 버전 v… 설치하시겠습니까?" 표시 ③지금 업데이트→진행률→종료→무인설치→**자동 재실행** ④취소 시 창 유지 + 만료 안내(F1) ⑤랜선 분리 시 **20초 내** 만료 안내(F3 워치독) ⑥`%LOCALAPPDATA%\원천징수자동화-data\logs\update.log` 에 `expiry-gate:` 기록 대조. ③④는 `tools/verify_auto_update.py` 로 자동화 가능, ②⑤는 수동. **LV-2 와 같은 빌드 사이클에서 함께 소화할 것** |
 
 ---
 
@@ -212,7 +219,7 @@
 8. **TD-11 / TD-14 / TD-15 / TD-16** — LOW 정리. TD-11 은 post-build DLL 제거 스크립트 필요(exclude 로는 불가).
 9. **LV-1 ~ LV-6** — 출하 전 라이브 스모크 (부채 아님, 게이트). **LV-2 는 무서명 출하가 계속되는 한 상시 리스크. LV-6 은 다음 릴리스 빌드 사이클에 LV-2 와 묶어 수행 합의(2026-07-29).**
 
-> **자동 업데이트 관련 항목 색인**(흩어져 있어 함께 봐야 함): **TD-18**(만료 게이트, ✅) · **LV-6**(그 빌드 스모크) · **LV-2**(Defender 오탐 — 차단 시 무인설치 실패) · **TD-01**(`version.json` 해시 정합성, ✅) · **TD-11**(번들 383MB = 업데이트 다운로드 용량).
+> **자동 업데이트 관련 항목 색인**(흩어져 있어 함께 봐야 함): **TD-18**(만료 게이트, ✅) · **LV-6**(그 빌드 스모크) · **LV-2**(Defender 오탐 — 차단 시 무인설치 실패) · **TD-01**(`version.json` 해시 정합성, ✅) · **TD-11**(번들 387MB = 업데이트 다운로드 용량).
 > **★코드 밖 선행 조건:** v1.1.1 이하 설치본은 무인설치 래퍼 결함이 내장돼 **자기 힘으로 못 올라온다** → 해당 PC는 v1.1.2+ **수동 1회 설치** 필요. 이게 끝나지 않으면 TD-18 을 포함한 어떤 개선도 그 PC에 도달하지 않는다.
 
 ---
@@ -221,7 +228,8 @@
 
 | 일자 | HEAD | 내용 |
 |---|---|---|
-| 2026-08-07 | (본 커밋) | **TD-19 연계 문서 재검증.** `parallel-edi-refactoring-backlog.md` 전 항목 코드 대조(서브에이전트 2종) — PE 전부 VALID·폐기/신규 없음. 백로그 문구 정밀화 + Wave D1/D2 분리만. **코드 리팩터 미실시.** 기준 시점 2026-08-07 |
+| 2026-08-19 | `6ef206c` | **전 항목 코드 재검증 (v1.1.12).** TD 상태 변경 없음(⬜/🟦/✅ 그대로). 줄수·줄번호·포털 수 정정: `db.py` 1,228 / runner 1,344·6포털 / MainWindow 1,639 / 번들 387MB. `Portal` 에 WETAX 추가됨(COMWEL 여전히 없음). **PE-P0-5 ✅** (`9c34613`, v1.1.5) — TD-19 포인터만 갱신. LV-3 `adjustment==0` pytest 0건 확인. 신규 TD 없음. **코드 리팩터 미실시.** |
+| 2026-08-07 | (문서 커밋) | **TD-19 연계 문서 재검증.** `parallel-edi-refactoring-backlog.md` 전 항목 코드 대조(서브에이전트 2종) — 당시 PE 전부 VALID. 백로그 문구 정밀화 + Wave D1/D2 분리만. **코드 리팩터 미실시.** |
 | 2026-07-16 | `ad483f8` | 최초 작성 (v1.0.3 기준, TD-01~16 + LV-1~5) |
 | 2026-07-20 | `3202b50` | **전 항목 코드 재검증 후 갱신 (v1.0.5 기준)** — 아래 참조 |
 | 2026-07-29 | `f0980e9` | **TD-18 신규 ✅ + LV-6 신규.** 만료 게이트 자동 업데이트 경로 구현(A안). 적대적 리뷰로 결함 3건(취소 시 무창 종료·취소 무시 설치·확인 모달 무한대기) 수정, 이후 독립 스모크로 `prog.close()` 의 `canceled` 재emit 회귀를 추가 발견·수정. Qt 게이트 테스트 신설(offscreen 4). 전체 263 passed. 실기기 검증은 LV-6 로 이월 |
