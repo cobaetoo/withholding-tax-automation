@@ -267,7 +267,14 @@ class WehagoSwsaWorkflow(BaseWorkflow):
             desktop, period, folder,
             standalone_site="국민건강보험", portal_subdir="국민건강보험")
         if nhis_dir:
-            matches = glob.glob(os.path.join(nhis_dir, "가입자고지내역서_건강_*.pdf"))
+            # ★glob.escape(nhis_dir) 필수 — 경로에 수임처명이 들어가고, 담당자
+            # 접두 '[손예린]' 같은 대괄호는 glob 에서 문자 클래스로 해석돼
+            # '손|예|린 중 한 글자'가 된다(경로 불일치 → 매칭 0건).
+            # 그러면 nhis_pdf=None 으로 예외 없이 병합만 조용히 스킵되어,
+            # 다운로드·업로드는 성공한 채 건강보험/장기요양 컬럼만 0원이 된다.
+            # 패턴의 '*' 는 살려야 하므로 디렉토리 부분에만 적용한다.
+            matches = glob.glob(
+                os.path.join(glob.escape(nhis_dir), "가입자고지내역서_건강_*.pdf"))
             if matches:
                 result["nhis_pdf"] = matches[0]
         log(f"    NHIS 디렉토리: {nhis_dir or '미발견'}"

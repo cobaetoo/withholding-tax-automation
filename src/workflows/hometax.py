@@ -48,7 +48,10 @@ class HometaxWorkflow(BaseWorkflow):
         if not state.should_skip_step(job_id, "find_swer_file"):
             state.before_step(job_id, "find_swer_file", 0)
 
-            search_pattern = os.path.join(save_dir, "*.01")
+            # save_dir 에 수임처명이 그대로 들어간다(make_save_dir). 담당자 접두
+            # '[손예린]' 의 대괄호가 glob 문자 클래스로 해석되지 않도록 디렉토리만
+            # 이스케이프 — 미적용 시 파일이 있어도 '신고파일 없음'으로 실패한다.
+            search_pattern = os.path.join(glob.escape(save_dir), "*.01")
             matches = glob.glob(search_pattern)
             if not matches:
                 state.fail_step(

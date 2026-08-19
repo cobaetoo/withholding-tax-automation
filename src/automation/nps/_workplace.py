@@ -312,30 +312,27 @@ async def _search_workplace_in_modal(page, search_text, search_by_mgmt_no=False)
     )
     combo_id = f"{MODAL_SEARCH}.cbo00"
     want = "사업장관리번호" if search_by_mgmt_no else "사업장명"
-    current = ""
-    try:
-        current = await page.evaluate(
-            '(id) => { const e = document.getElementById(id); '
-            'return e ? (e.textContent || "").trim() : ""; }',
-            combo_id,
-        ) or ""
-    except Exception:
-        current = ""
 
-    if want in current:
-        log(f"  검색구분 이미 '{want}' — 콤보 변경 생략")
-    else:
-        await nexacro_click_button(page, f"{combo_id}.dropbutton")
-        await human_delay(1)
-        item = "item_1" if search_by_mgmt_no else "item_0"
-        result = await nexacro_wait_and_click(
-            page, f"{combo_id}.combolist.{item}", max_wait=5
-        )
-        if not result.get("ok"):
-            result = await nexacro_select_combo(page, combo_id, want)
-        if not result.get("ok"):
-            log(f"  WARN: 드롭다운 항목 선택 실패 - {result}")
-        await human_delay(1)
+    # 검색구분 콤보는 조건 없이 매번 명시적으로 설정한다.
+    # ★"이미 원하는 값이면 드롭다운 생략" 최적화 금지 — 콤보 요소(cbo00)의
+    # textContent 에는 하위 combolist 의 항목 라벨('사업장명'·'사업장관리번호')이
+    # 모두 들어 있어 어떤 부분문자열 비교도 항상 참이 된다. 그러면 else 블록이
+    # 통째로 죽어 콤보가 기본값('사업장명')에 방치되고, 관리번호 검색이 숫자를
+    # 사업장명으로 검색해 0건 → 이름 fallback 이 대신 성공시키므로 전환 자체는
+    # 성공해 보인다. 즉 관리번호 정확일치 보호만 조용히 사라진다(4edcf0c 회귀).
+    # 아끼는 값은 콤보 조작 1회(≈2초)뿐이고, 공지 오버레이로 인한 클릭 타임아웃은
+    # 이 함수 첫 줄 dismiss_blocking_popups 가 이미 근본 해결한다.
+    await nexacro_click_button(page, f"{combo_id}.dropbutton")
+    await human_delay(1)
+    item = "item_1" if search_by_mgmt_no else "item_0"
+    result = await nexacro_wait_and_click(
+        page, f"{combo_id}.combolist.{item}", max_wait=5
+    )
+    if not result.get("ok"):
+        result = await nexacro_select_combo(page, combo_id, want)
+    if not result.get("ok"):
+        log(f"  WARN: 드롭다운 항목 선택 실패 - {result}")
+    await human_delay(1)
 
     await page.evaluate("""(args) => {
         const input = document.getElementById(args.inputId + ":input");
