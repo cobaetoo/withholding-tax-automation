@@ -58,6 +58,7 @@ from src.automation.nps._workplace import (
     select_workplace_by_index,
     list_workplaces,
     reset_workplace_page,
+    dismiss_blocking_popups,
 )
 
 # ─── 다운로드 재export ────────────────────────────────────────────────────────
@@ -142,11 +143,15 @@ async def wait_for_login(page):
 
 
 async def wait_for_nexacro_ready(page, max_wait=NEXACRO_READY_TIMEOUT_S):
-    """Nexacro 프레임워크가 완전히 로딩될 때까지 대기"""
+    """Nexacro 프레임워크가 완전히 로딩될 때까지 대기.
+
+    준비 직후 사칭 유의사항 등 차단 공지를 점검·닫는다(메인 라우트 진입 훅).
+    """
     NPS_READY_ELEMENT = BTN_CHANGE_WORKPLACE
     for i in range(max_wait):
         if await wait_for_element(page, NPS_READY_ELEMENT, timeout=1):
             log(f"  Nexacro 프레임워크 준비 완료 ({i+1}초)")
+            await dismiss_blocking_popups(page)
             return True
     log("  ERROR: Nexacro 프레임워크 로딩 시간 초과")
     return False
@@ -162,7 +167,11 @@ async def ensure_login_page(page):
 # ─── 네비게이션 ──────────────────────────────────────────────────────────────
 
 async def navigate_to_decision_details(page):
-    """결정내역 > 국민연금보험료 결정내역 메뉴로 이동"""
+    """결정내역 > 국민연금보험료 결정내역 메뉴로 이동.
+
+    메뉴 클릭 전 차단 공지를 다시 점검한다(메인→결정내역 전환).
+    """
+    await dismiss_blocking_popups(page)
     TOP_MENU_ID = (
         "mainframe.VFrameSet.FrameSdi.form.divTop.form.divTopMenu"
         ".form.btnTop_M08000000"
@@ -222,6 +231,7 @@ async def open_decision_detail(page, year=None, month=None):
     month_prefix = f"{_y}.{_m:02d}"
 
     log(f"  결정내역 검색: 월={month_prefix}...")
+    await dismiss_blocking_popups(page)
 
     # 조회 버튼 클릭
     SEARCH_BTN = (

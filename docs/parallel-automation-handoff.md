@@ -216,6 +216,23 @@ GUI 다중 러너보다 **CLI 2-프로세스**가 훨씬 가벼움:
 - 교훈: Nexacro 모달의 **명시적 닫기는 신뢰 어려움 → 리로드 리셋이 가장 확실**.
   정상 선택은 그리드 행 dblclick의 사이드이펙트로 모달이 자동 닫히는 것에 의존.
 
+### 9.5 NPS 로그인 공지(사칭 유의사항) 자동 닫기 ★
+- 2026-08 라이브: 로그인 직후 ChildFrame **'직원 사칭 관련 유의사항'**(ID `FrameSdi.{숫자}`,
+  예: 16398 — **실행마다 바뀜**)이 ChangeBusi 위(z-index 더 높음)에 떠
+  사업장 검색 콤보 `cbo00.combolist.item_0/1`이 5초 타임아웃. X만 닫으면
+  메인/결정내역 재진입 때 다시 떠 조회 클릭이 오버레이에 먹힌다.
+- **해결 (`_workplace.dismiss_blocking_popups`)**: 제목/본문 힌트(유의사항·사칭·오늘 하루
+  그만보기)로 ChildFrame을 찾고, `chk00`('오늘 하루 그만보기')를 켠 뒤
+  `titlebar.closebutton`으로 닫는다. ChangeBusi·UHJE·divWork 는 닫지 않음.
+- **클릭은 `nexacro_click`(dispatchEvent)만**. `page.mouse.click`은 병렬 3창에서
+  NPS가 가려지면 앞 창을 치고 `{ok:True}` 거짓 양성(§9.4와 동일 함정).
+- **훅(단일·병렬 공통 모듈 + 병렬 CLI 명시)**:
+  `wait_for_nexacro_ready`(로그인/리셋/모달 닫힘) · `navigate_to_decision_details` ·
+  `open_decision_detail` 조회 전 · 병렬 `run_auto_batch` 수임처 루프 시작 ·
+  `run_single_workplace` 결정내역 이동 전.
+- 실기: 단독 국민연금에서 공지 닫힘·사업장 전환 성공 확인. 콤보가 이미
+  '사업장관리번호'면 드롭다운 변경 생략.
+
 ---
 
 ## 10. 병렬 "전체 실행"·정지 버튼·정지 시 Chrome 종료 안정화 (라이브 검증 완료, 2026-06-25)

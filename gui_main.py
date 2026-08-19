@@ -32,6 +32,40 @@ def resource_path(relative_path):
 _MUTEX_HANDLE = None
 
 
+def _hide_owned_console(*, _kernel32=None, _user32=None, argv=None):
+    """python.exe 로 뜬 *전용* 콘솔만 숨긴다.
+
+    `start "WTaxGUI" python.exe` 처럼 이 프로세스만을 위해 생긴 검정 창은
+    숨기고, 기존 터미널에서 실행한 경우(콘솔에 부모도 붙어 있음)는 그대로 둔다.
+    pythonw / frozen windowed 는 콘솔이 없어 no-op.
+    --wtax-cli 자식은 stdout 이 필요하므로 건드리지 않는다.
+
+    Returns:
+        True if a owned console was hidden.
+    """
+    if sys.platform != "win32":
+        return False
+    argv = sys.argv if argv is None else argv
+    if "--wtax-cli" in argv:
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = _kernel32 or ctypes.windll.kernel32
+        user32 = _user32 or ctypes.windll.user32
+        hwnd = kernel32.GetConsoleWindow()
+        if not hwnd:
+            return False
+        proc_ids = (wintypes.DWORD * 16)()
+        n = int(kernel32.GetConsoleProcessList(proc_ids, 16))
+        if n != 1:
+            return False
+        user32.ShowWindow(hwnd, 0)  # SW_HIDE
+        return True
+    except Exception:
+        return False
+
+
 def _create_single_instance_mutex():
     """installer.iss 의 AppMutex 와 일치하는 명명 뮤텍스 생성.
 
@@ -430,6 +464,8 @@ def main():
     # 빌드된 exe 에서는 python -m 이 불가해 parallel_cli_worker 가 이 진입점을 경유해 CLI 모듈을 실행.
     if _dispatch_cli_subprocess():
         return
+
+    _hide_owned_console()
 
     # PyInstaller onefile/onedir 모두: exe 위치를 CWD로
     if getattr(sys, 'frozen', False):

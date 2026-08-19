@@ -105,7 +105,14 @@ Nexacro 기반 웹 프레임워크로 일반 DOM click이 동작하지 않음:
 1. Chrome 실행 → edi.nps.or.kr 접속
 2. 사용자 공동인증서 수동 로그인
 3. 수임처별 순차 처리:
-   - **사업장관리번호로 검색**: 콤보박스를 "사업장관리번호"(`item_1`)로 변경 후 숫자만 입력
+   - **로그인/메인 진입 시 차단 공지 닫기**: '직원 사칭 관련 유의사항' 등 ChildFrame(ID 가변)이
+     사업장전환 모달을 가리면 콤보 `item_0`/`item_1` 클릭이 타임아웃된다.
+     `dismiss_blocking_popups`가 '오늘 하루 그만보기'(chk00)를 켠 뒤 titlebar X로 닫는다.
+     클릭은 `nexacro_click`(dispatchEvent)만 사용 — 병렬에서 NPS 창이 가려지면
+     `page.mouse.click`이 앞 창을 친다. 훅: `wait_for_nexacro_ready` · 결정내역 메뉴/조회 전 ·
+     병렬 `run_auto_batch` 수임처 루프 · `run_single_workplace`.
+   - **사업장관리번호로 검색**: 콤보가 이미 "사업장관리번호"면 변경 생략. 아니면
+     콤보박스를 "사업장관리번호"(`item_1`)로 변경 후 숫자만 입력
    - 사업장 전환 → 결정내역 이동 → 사용자 설정 월의 결정내역 상세 진입
    - 가입자내역(`grdList2`), 소급분내역(`grdList3`), 국고지원내역(`grdList4`) 탭 순회
 4. Nexacro 이벤트: `dispatchEvent(new MouseEvent(...))` 로 mousedown → mouseup → click 순차 발생
@@ -624,7 +631,7 @@ python build.py
 | Nexacro에 dispatchEvent 사용 | 일반 DOM click을 Nexacro가 무시함. mousedown→mouseup→click 순차 이벤트 필요. |
 | 직렬 9223·병렬 EDI 포트/프로필 분리 | 직렬 경로는 9223 재사용을 보존하고, 병렬 EDI는 9223/9224/9225로 보안모듈·탭·다운로드를 격리. |
 | 병렬 NHIS 문서 열기: Nexacro/locator 우선 | 합성 dblclick·절대 좌표만 쓰면 백그라운드 Chrome·DPI 에서 상세 미진입. 행·열/id 기반 우선(v1.1.4 §18). |
-| GUI 기동 `run_gui.bat` | 탐색기 더블클릭 권장. IDE/에이전트 Job 에 묶인 pythonw 는 세션 종료 시 강제 킬될 수 있음. 진단: `logs/lifecycle.log`. |
+| GUI 기동 `run_gui.bat` | `start "" pythonw`(빈 제목)로 분리 실행 — `start "WTaxGUI" python.exe` 는 검정 콘솔을 만든다. `python.exe` 폴백 시 `gui_main._hide_owned_console`이 전용 콘솔만 숨김(부모 터미널은 유지). IDE/에이전트 Job 에 묶인 프로세스는 세션 종료 시 킬될 수 있음. 진단: `logs/lifecycle.log`. |
 | 수동 로그인 방식 | 공동인증서/보안모듈 자동화의 법적/기술적 리스크 회피. |
 | QThread + asyncio 분리 | Playwright(asyncio)와 Qt 이벤트루프를 직접 섞을 수 없음. 병렬 CLI stdout 은 queue→QThread drain 만 Signal emit. |
 | 사업장관리번호로 수임처 검색 | 동명 수임처 구분 및 정확한 매칭. 사업자등록번호에서 `-` 제거 후 `0` 추가. |

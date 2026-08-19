@@ -13,9 +13,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 from src.utils.log import log
 from src.utils.human import human_delay
 from src.utils.nexacro import (
+    nexacro_click,
     nexacro_dblclick_cell_viewport,
     nexacro_click_button_viewport,
     nexacro_wait_and_click,
+    nexacro_select_combo,
     nexacro_find_row,
     nexacro_get_grid_data,
 )
@@ -24,6 +26,186 @@ from src.automation.nps._constants import GRID_WORKPLACE, BTN_CHANGE_WORKPLACE, 
 # 로컬 별칭
 nexacro_dblclick_cell = nexacro_dblclick_cell_viewport
 nexacro_click_button = nexacro_click_button_viewport
+
+# ─── 로그인/전환 차단 공지 팝업 ──────────────────────────────────────────────
+
+# 2026-08 라이브: '직원 사칭 관련 유의사항' ChildFrame.
+# ID 가 FrameSdi.16398 처럼 숫자라 고정 불가 → 제목/본문 힌트로 찾는다.
+# ChangeBusi(사업장전환)·UHJE*(출력 모달) 는 절대 닫지 않는다.
+_NOTICE_HINTS = ("유의사항", "사칭", "오늘 하루 그만보기", "사기 주의")
+_NOTICE_KEEP_NAMES = ("form", "ChangeBusi")
+_NOTICE_KEEP_PREFIXES = ("UHJE", "divWork")
+
+
+def _is_keep_popup_name(name):
+    if name in _NOTICE_KEEP_NAMES:
+        return True
+    return any(name.startswith(p) for p in _NOTICE_KEEP_PREFIXES)
+
+
+_JS_FIND_NOTICE_POPUPS = """
+(args) => {
+    const hints = args.hints;
+    const keepNames = new Set(args.keepNames);
+    const keepPrefixes = args.keepPrefixes;
+    const vis = (el) => {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+    };
+    const keep = (name) => {
+        if (keepNames.has(name)) return true;
+        return keepPrefixes.some((p) => name.startsWith(p));
+    };
+    const out = [];
+    for (const el of document.querySelectorAll('[id^="mainframe.VFrameSet.FrameSdi."]')) {
+        const id = el.id || '';
+        const parts = id.split('.');
+        if (parts.length !== 4) continue;
+        const name = parts[3];
+        if (keep(name) || !vis(el)) continue;
+        const titleEl = document.getElementById(id + '.titlebar');
+        const blob = ((titleEl && titleEl.textContent) || '') + ' ' + (el.innerText || '');
+        const text = blob.replace(/\\s+/g, ' ');
+        if (!hints.some((h) => text.includes(h))) continue;
+        const closeId = id + '.titlebar.closebutton';
+        if (!document.getElementById(closeId)) continue;
+        const guessed = id + '.form.divPopBg.form.divPopWork.form.div01.form.chk00';
+        const chk = document.getElementById(guessed) || el.querySelector('[id$=".chk00"]');
+        out.push({
+            id, name, title: text.trim().slice(0, 80), closeId,
+            chkId: chk ? chk.id : null,
+        });
+    }
+    return out;
+}
+"""
+
+# Nexacro CheckBox: set_value(true) 가 있으면 토글 없이 켠다.
+# 클래스/aria 로 on/off 를 알 수 있으면 그 값을 쓰고, 모르면 on=null.
+_JS_CHECKBOX_STATE = """
+(chkId) => {
+    const el = document.getElementById(chkId);
+    if (!el) return {exists: false, on: null, apiSet: false};
+    const readOn = () => {
+        const aria = (el.getAttribute('aria-checked') || '').toLowerCase();
+        if (aria === 'true') return true;
+        if (aria === 'false') return false;
+        const cls = (el.className || '').toString();
+        if (/\\b(nexaselected|selected|checked|nexachecked)\\b/i.test(cls)) return true;
+        try {
+            const comp = el.linkedcontrol
+                || (el._linked_element && el._linked_element.linkedcontrol);
+            if (comp) {
+                if (typeof comp.isChecked === 'function') return !!comp.isChecked();
+                if (comp.value === true || comp.value === 'true' || comp.value === 1) return true;
+                if (comp.value === false || comp.value === 'false' || comp.value === 0) return false;
+            }
+        } catch (e) {}
+        return null;
+    };
+    try {
+        const comp = el.linkedcontrol
+            || (el._linked_element && el._linked_element.linkedcontrol);
+        if (comp && typeof comp.set_value === 'function') {
+            comp.set_value(true);
+            return {exists: true, on: true, apiSet: true};
+        }
+    } catch (e) {}
+    return {exists: true, on: readOn(), apiSet: false};
+}
+"""
+
+
+async def _ensure_notice_checkbox_on(page, chk_id):
+    """'오늘 하루 그만보기' 를 켠다. 이미 켜져 있으면 클릭하지 않는다."""
+    if not chk_id:
+        return False
+    try:
+        state = await page.evaluate(_JS_CHECKBOX_STATE, chk_id)
+    except Exception as e:
+        log(f"  WARN: NPS 공지 체크 상태 확인 실패 - {e}")
+        return False
+    if not state or not state.get("exists"):
+        return False
+    if state.get("apiSet") or state.get("on") is True:
+        if state.get("apiSet"):
+            log("  NPS 공지 '오늘 하루 그만보기' 체크")
+        return True
+    # 미체크이거나 판정 불가면 한 번 클릭 후 꺼졌으면 다시 클릭
+    result = await nexacro_click(page, chk_id)
+    if not result.get("ok"):
+        log(f"  WARN: NPS 공지 체크 클릭 실패 - {result}")
+        return False
+    await human_delay(0.2)
+    try:
+        after = await page.evaluate(_JS_CHECKBOX_STATE, chk_id)
+    except Exception:
+        after = None
+    if after and after.get("on") is False:
+        await nexacro_click(page, chk_id)
+        await human_delay(0.2)
+    log("  NPS 공지 '오늘 하루 그만보기' 체크")
+    return True
+
+
+async def find_notice_popups(page):
+    """차단 공지 ChildFrame 목록. page.evaluate 결과만 반환(테스트 훅)."""
+    return await page.evaluate(_JS_FIND_NOTICE_POPUPS, {
+        "hints": list(_NOTICE_HINTS),
+        "keepNames": list(_NOTICE_KEEP_NAMES),
+        "keepPrefixes": list(_NOTICE_KEEP_PREFIXES),
+    })
+
+
+async def dismiss_blocking_popups(page):
+    """사업장전환/검색을 가리는 NPS 공지 ChildFrame 을 닫는다.
+
+    라이브(2026-08): '직원 사칭 관련 유의사항'이 ChangeBusi 위(z=1000003)에
+    떠 콤보 item_0/item_1 클릭이 5초 타임아웃으로 실패했다.
+    닫기 전 '오늘 하루 그만보기'(chk00)를 켠다. 클릭은 nexacro_click
+    (dispatchEvent)만 쓴다 — 병렬에서 NPS 창이 가려지면 mouse.click 은
+    앞 창을 치고 {ok:True} 거짓 양성이 난다.
+    """
+    try:
+        pops = await find_notice_popups(page)
+    except Exception as e:
+        log(f"  WARN: NPS 공지 팝업 탐색 실패 - {e}")
+        return 0
+    if not pops:
+        return 0
+    closed = 0
+    for pop in pops:
+        title = pop.get("title") or pop.get("id")
+        close_id = pop.get("closeId")
+        if not close_id:
+            continue
+        await _ensure_notice_checkbox_on(page, pop.get("chkId"))
+        # dispatchEvent 전용 — 병렬에서 NPS 창이 뒤에 가려지면
+        # page.mouse.click(좌표)은 앞 창을 치고 {ok:True} 거짓 양성이 난다.
+        result = await nexacro_click(page, close_id)
+        if not result.get("ok"):
+            log(f"  WARN: NPS 공지 닫기 실패 ({title}) - {result}")
+            continue
+        log(f"  NPS 공지 팝업 닫음: {title}")
+        closed += 1
+        # 닫힘 대기 (다음 클릭이 오버레이에 먹히지 않게)
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            try:
+                still = await page.evaluate(
+                    '(id) => { const e = document.getElementById(id); '
+                    'if (!e) return false; '
+                    'const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; }',
+                    pop.get("id"),
+                )
+                if not still:
+                    break
+            except Exception:
+                break
+            await asyncio.sleep(0.2)
+        await human_delay(0.3)
+    return closed
 
 
 # ─── 사업장 전환 ───────────────────────────────────────────────────────────────
@@ -35,6 +217,7 @@ async def _open_workplace_modal_verified(page, max_attempts=3):
     클릭 후 GRID_WORKPLACE 그리드가 로드(행≥1)되어야 성공으로 본다.
     실패 시 메뉴(open_workplace_selector) 폴백 후 재시도.
     """
+    await dismiss_blocking_popups(page)
     for attempt in range(max_attempts):
         # 시도 A: BTN_CHANGE_WORKPLACE (화면 상태 무관, 헤더 버튼)
         await nexacro_click_button(page, BTN_CHANGE_WORKPLACE)
@@ -122,20 +305,37 @@ async def switch_workplace_open(page):
 
 async def _search_workplace_in_modal(page, search_text, search_by_mgmt_no=False):
     """사업장전환 모달의 검색 입력란에 텍스트 입력 후 검색 실행"""
+    await dismiss_blocking_popups(page)
     MODAL_SEARCH = (
         "mainframe.VFrameSet.FrameSdi.ChangeBusi"
         ".form.divPopBg.form.divPopWork.form.div01.form"
     )
-    await nexacro_click_button(page, f"{MODAL_SEARCH}.cbo00.dropbutton")
-    await human_delay(1)
+    combo_id = f"{MODAL_SEARCH}.cbo00"
+    want = "사업장관리번호" if search_by_mgmt_no else "사업장명"
+    current = ""
+    try:
+        current = await page.evaluate(
+            '(id) => { const e = document.getElementById(id); '
+            'return e ? (e.textContent || "").trim() : ""; }',
+            combo_id,
+        ) or ""
+    except Exception:
+        current = ""
 
-    item = "item_1" if search_by_mgmt_no else "item_0"
-    result = await nexacro_wait_and_click(
-        page, f"{MODAL_SEARCH}.cbo00.combolist.{item}", max_wait=5
-    )
-    if not result.get("ok"):
-        log(f"  WARN: 드롭다운 항목 선택 실패 - {result}")
-    await human_delay(1)
+    if want in current:
+        log(f"  검색구분 이미 '{want}' — 콤보 변경 생략")
+    else:
+        await nexacro_click_button(page, f"{combo_id}.dropbutton")
+        await human_delay(1)
+        item = "item_1" if search_by_mgmt_no else "item_0"
+        result = await nexacro_wait_and_click(
+            page, f"{combo_id}.combolist.{item}", max_wait=5
+        )
+        if not result.get("ok"):
+            result = await nexacro_select_combo(page, combo_id, want)
+        if not result.get("ok"):
+            log(f"  WARN: 드롭다운 항목 선택 실패 - {result}")
+        await human_delay(1)
 
     await page.evaluate("""(args) => {
         const input = document.getElementById(args.inputId + ":input");

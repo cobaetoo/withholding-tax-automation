@@ -189,7 +189,10 @@ Nexacro는 일반 DOM click/playwright click을 **무시**함. 이벤트를 직�
     - 부분 매칭 지원: 이름 일부만 입력해도 검색, 다중 결과 시 사용자 선택
     - 표시 목록에 없으면 `_search_workplace_in_modal()`로 모달 내 검색 자동 실행
     - 검색 실패 시 이름 재입력 루프 (모달 재오픈)
-    - 모달 검색 요소: 콤보 `cbo00.combolist.item_0`(사업장명), 입력 `edt08`, 버튼 `btn00`
+    - 모달 검색 요소: 콤보 `cbo00.combolist.item_0`(사업장명) / `item_1`(사업장관리번호), 입력 `edt08`, 버튼 `btn00`
+    - 콤보 텍스트가 이미 원하는 구분(사업장관리번호/사업장명)이면 드롭다운 변경 생략
+    - 로그인 공지('직원 사칭 관련 유의사항' 등, ChildFrame ID 가변): `dismiss_blocking_popups`가
+      '오늘 하루 그만보기' 체크 후 X 닫기. **dispatchEvent만** (병렬 가림 창에서 mouse.click 금지)
 
 ### 메뉴 네비게이션 ID
 
@@ -547,7 +550,7 @@ NPS EDI, NHIS EDI는 **Nexacro** 기반으로, URL 리디렉션 직후에도
 
 | 포털 | 대기 함수 | 감지 대상 | 최대 대기 |
 |------|-----------|-----------|-----------|
-| NPS EDI | `nps._common.wait_for_nexacro_ready()` | `btnChangeBusi` DOM 요소 | 30초 |
+| NPS EDI | `nps._common.wait_for_nexacro_ready()` | `btnChangeBusi` DOM 요소 | 30초. 준비 직후 `dismiss_blocking_popups`(사칭 유의사항 ChildFrame) |
 | NHIS EDI | `nhis._common_edi.wait_for_nexacro_ready()` | `nexacro.Application.mainframe.childframe.form.components.div_body` | 30초 |
 
 ### 이전 문제 (해결됨)

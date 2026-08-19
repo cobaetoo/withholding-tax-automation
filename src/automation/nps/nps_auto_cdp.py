@@ -34,7 +34,7 @@ from src.automation.nps._common import (
     click_detail_tab, output_with_full_ssn, download_pdf_from_preview,
     save_excel, save_integrated, download_final_integrated,
     process_tab_download, switch_workplace, switch_workplace_open,
-    reset_workplace_page, wait_for_nexacro_ready,
+    reset_workplace_page, wait_for_nexacro_ready, dismiss_blocking_popups,
     nexacro_click_button,
     BTN_CHANGE_WORKPLACE, BTN_MODAL_CONFIRM, BTN_MODAL_CANCEL,
     TAB_MEMBER, TAB_RETRO, TAB_GOVT,
@@ -137,6 +137,7 @@ async def run_auto_batch(page, context, *, firms, year, month, mgmts=None):
     """
     if firms is None:
         # --all: 사업장 전체 이름 수집
+        await dismiss_blocking_popups(page)
         if not await switch_workplace_open(page):
             log("ERROR: 사업장전환 모달 오픈 실패")
             return
@@ -158,6 +159,7 @@ async def run_auto_batch(page, context, *, firms, year, month, mgmts=None):
         log(f"\n{'='*55}")
         log(f"  [{i}/{len(targets)}] {wp_name}" + (f" (관리번호 {mgmt})" if mgmt else ""))
         try:
+            await dismiss_blocking_popups(page)  # 수임처 루프마다 사칭 공지 재점검
             if not await switch_workplace_open(page):
                 log(f"  ERROR: 사업장전환 실패 - {wp_name} 스킵")
                 skipped.append({"name": wp_name, "reason": "오픈실패"})
@@ -411,6 +413,7 @@ async def run_single_workplace(page, context, workplace_name, is_first=False,
                              subdir=_SAVE_SUBDIR)
 
     await human_delay(3)
+    await dismiss_blocking_popups(page)  # 결정내역 이동 전 공지 재점검
 
     # Step 1: 결정내역 이동
     log("  결정내역 메뉴 이동...")
