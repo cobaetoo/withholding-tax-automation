@@ -194,7 +194,7 @@ for (const frame of page.frames()) {
 
 ```bash
 google-chrome \
-  --remote-debugging-port=9222 \
+  --remote-debugging-port=9223 \
   --user-data-dir=/tmp/wehago-automation-profile
 ```
 
@@ -202,7 +202,7 @@ google-chrome \
 
 ```bat
 "C:\Program Files\Google\Chrome\Application\chrome.exe" ^
-  --remote-debugging-port=9222 ^
+  --remote-debugging-port=9223 ^
   --user-data-dir="C:\wehago-automation-profile"
 ```
 
@@ -211,7 +211,7 @@ google-chrome \
 ```ts
 import { chromium } from 'playwright';
 
-const browser = await chromium.connectOverCDP('http://localhost:9222');
+const browser = await chromium.connectOverCDP('http://localhost:9223');
 const context = browser.contexts()[0];
 
 const page = context.pages().find(p => p.url().includes('wehago'));
@@ -1255,7 +1255,7 @@ const fieldPositions: Record<FieldName, FieldPosition> = {
 };
 
 async function findWehagoPage() {
-  const browser = await chromium.connectOverCDP('http://localhost:9222');
+  const browser = await chromium.connectOverCDP('http://localhost:9223');
   const context = browser.contexts()[0];
 
   const page = context.pages().find(p => p.url().includes('wehago'));

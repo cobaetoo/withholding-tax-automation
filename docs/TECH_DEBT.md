@@ -3,7 +3,7 @@
 > **목적:** 원천징수세 자동화 프로젝트의 기술 부채·결함·로드맵을 **단일 진실표**로 통합 관리.
 > 산재해 있던 부채 관련 내용(핸드오프·도메인 PROGRESS·GUIDE 임베디드 리스크)을 한곳에서 우선순위화한다.
 >
-> **기준 시점:** 2026-08-19 · **버전:** `1.1.12` (`src/version.py`) · **HEAD:** `6ef206c`
+> **기준 시점:** 2026-08-19 · **버전:** `1.1.12` (`src/version.py`) · **HEAD:** `f99ee68`
 > **관점:** GUI 프로그램(`gui_main.py` → `MainWindow` → Workers → Workflows → Automation → Utils → Chrome CDP) 기준.
 > 코드를 수정하기 전, 본 문서의 해당 항목과 [§1 산재 문서 관계]를 함께 읽을 것.
 >
@@ -51,7 +51,7 @@
 | `docs/parallel-edi-refactoring-backlog.md` | **v1.1.4 이후** 병렬 구조 리팩터 백로그만 (PE-*). TD-07 ↔ PE-P2-1 · **TD-19**. 2026-08-19 재검증(v1.1.12): PE-P0-5 해결, 나머지 VALID. 코드 착수 전 필수 열람. |
 | `docs/parallel-first-run-investigation.md` | 신규 병렬 프로필의 보안모듈/주소창 없는 팝업 문제 조사·수정·테스트 기록. **LV-4**의 최신 세부 근거. |
 | `src/automation/wehago/PROGRESS.md` | 도메인 진행 + `## 다음 단계 TODO`(대부분 MVP 시절, 상당수 완료). 미완료만 **LV-5**로 인용. |
-| `src/automation/hometax/PROGRESS.md` | 제출 플로우 완료·라이브 검증(2026-07-17). **사이드바 Phase 12** (`hometax.py` `enabled=True`). 남은 TODO: 접수증 저장·신고내역 다운로드. ⚠ 포트 `9222` 오기 — TD-12. |
+| `src/automation/hometax/PROGRESS.md` | 제출 플로우 완료·라이브 검증(2026-07-17). **사이드바 Phase 12** (`hometax.py` `enabled=True`). 남은 TODO: 접수증 저장·신고내역 다운로드. 포트 오기는 이번 재검증에서 `9223`으로 정정 — TD-12 문서 정리는 계속 유효. |
 | `src/automation/wetax/PROGRESS.md` | Phase 13 제출·다건·안전 가드 **완료**(2026-07-25). 구조 부채 아님. 제품 잔여: 오류 N건 정책·일괄목록/접수번호. |
 | `GUIDE.md` (§risk 계열) | 기술 문서 내 임베디드 리스크. 본 문서가 상위 레지스터. |
 
@@ -79,9 +79,9 @@
 | **TD-15** | 🟢 | ⬜ | 로깅 | `print()` 기반 로깅 (`logging` 미사용) — `engine.py` 26곳 | `src/batch/engine.py` 등 | 파일 로깅/레벨 제어 불가 | 🔍 | 사용자 |
 | **TD-16** | 🟢 | ⬜ | 데드코드 | `VerificationDialog` **완전 미사용** + 포털 호스트 dict 중복 (**위치는 runner**, wetax 포함 6키) | `src/ui/widgets/settings_dialog.py` · `src/ui/workers/automation_runner.py:768-775,855-862` | 정리 필요 | 🔍 | 사용자 |
 | **TD-18** | 🔴 | ✅ | 런타임결함 | ~~만료·미인증 상태에서 자동 업데이트 도달 불가~~ → **해결**(`f0980e9`): 만료 게이트에서 확인→다운로드→무인설치 경로 제공 | `gui_main._run_expiry_update_gate` · `updater.should_offer_expiry_update/should_install_downloaded` | 만료 시 사용자가 새 버전을 받을 자동 경로 확보 (시한 `BETA_EXPIRES=2026-12-31`) | 🔍 ⚠라이브 미검증(LV-6) | 분석 |
-| **TD-17** | 🟡 | 🟦 | 데이터결함 | 무스코프 clients DELETE 3경로 — **db+runner list 분기 해결**. main “모두 삭제”는 의도 UX 유지 | `main_window._on_delete_all_clients` | 사용자 확인 후 전체 삭제 (고지 있음) | 🔍 | 분석 |
+| **TD-17** | 🟡 | ✅ | 데이터결함 | ~~무스코프 clients DELETE 3경로~~ → **해결**: db·runner 경로는 portal 스코프/no-op, main “모두 삭제”는 확인 후 의도된 전체삭제 UX | `main_window._on_delete_all_clients` | — | 🔍 | 분석 |
 
-> 참고(구조 일관성): TD-02·TD-04·TD-05·TD-13·TD-17 은 모두 **러너↔엔진↔DB 실행 경로**에 묶여 있어 Wave 3(`refactoring-handoff`)에서 함께 다루는 것이 효율적이다.
+> 참고(구조 일관성): TD-02·TD-04·TD-05·TD-13 은 **러너↔엔진↔DB 실행 경로**에 묶여 있어 Wave 3(`refactoring-handoff`)에서 함께 다루는 것이 효율적이다. TD-17의 데이터 결함은 해결됐고, main의 의도된 전체삭제 UX는 TD-06 계층 분리 범위로 남긴다.
 
 ---
 
@@ -159,7 +159,8 @@
 - **TD-10** ✅ `mark_crashed_as_recoverable(portal=)` 추가, `engine.initialize` 가 자기 portal 만 전달. 🔍
 - **TD-11** `_QT_EXCLUDE_MODULES`(`build.py:31-50`)가 `PySide6.*` **Python 바인딩만** exclude → 네이티브 DLL 잔존 확인(2026-08-19): `dist/원천징수자동화/_internal/PySide6/` 에 `Qt6Multimedia.dll`, `Qt6Pdf.dll`, `Qt6Qml*.dll`, `Qt6Quick*.dll`(Quick3D 포함) 존재. 실측 **406,342,309 B (387MB)**, 목표 315MB. 이전 기록 383MB보다 소폭 증가(Cython .pyd·기능 누적). PyInstaller exclude 로는 불가 → **post-build DLL 제거 스크립트** 필요. 🔍
 - **TD-12** 잔존 문서 정리. 🔍
-  > **정정(2026-07-20):** 루트 `PROGRESS.md` 는 **더 이상 없다**(도메인별 중첩본만 존재). 포트 오기의 실제 위치는 `src/automation/hometax/PROGRESS.md:8`(`9222`)과 `wehago_automation_guide.md:197,205,214,1258`. 실제값은 `src/utils/chrome_cdp.py:24` `CDP_PORT=9223`.
+  > **정정(2026-08-19):** Hometax 진행 문서와 보관용 WEHAGO 가이드의 CDP 포트 오기(`9222`)를 `9223`으로 수정했다. 루트 가이드는 초기 canvas 설계 아카이브로 남아 있고, 사용자 가이드 중복·구식 Phase 설계 문서는 계속 정리 대상이다.
+  > **정정(2026-07-20):** 루트 `PROGRESS.md` 는 **더 이상 없다**(도메인별 중첩본만 존재). 실제값은 `src/utils/chrome_cdp.py:24` `CDP_PORT=9223`.
   > **`GEMINI.md` 는 포트에 관해선 정확하다** — 상단에 자체 정확성 경고 배너가 있고 "CDP 포트: 9223(9222 사용 금지)"를 명시. 다만 NHIS 섹션 구식은 그대로(문서 자체가 인정).
   > 잔존: `PRD.md`(MVP), `wehago_automation_guide.md`(canvas 전제 — 폐기 대상), 사용자 가이드 3종 중복(`USER_GUIDE.md` / `docs/user-guide.md` / `docs/설치안내서.md`). `email-receipt-design.md` 는 아직 “Phase 11=메일”인데 코드상 11=지방세전자신고·12=홈택스·13=위택스.
 - **TD-13** `engine.run()` 프로덕션 데드코드 확인(2026-08-19 재확인) — 호출부는 `tests/test_engine.py` **테스트 전용**. 러너 `_handle_run_phase` 가 동일 루프를 `src/ui/workers/automation_runner.py:241-` 에 인라인 재구현(= `BatchEngine._run_job`/`run` `src/batch/engine.py:181-`). `tests/test_engine.py:3-4` 주석이 "Wave 3 에서 runner 가 engine.run() 을 호출하게 만들 때 동작 보존" 목적임을 명시 → **테스트는 보존 자산이니 삭제 금지.**
@@ -180,13 +181,13 @@
 
 ## 6. 신규 항목 상세
 
-### TD-17 — 무스코프 `DELETE FROM clients` 3경로 🟦 부분해결 [데이터결함] 🔍
+### TD-17 — 무스코프 `DELETE FROM clients` 3경로 ✅ 해결 [데이터결함] 🔍
 
 | 위치 | 트리거 | 상태 |
 |---|---|---|
 | `replace_clients_preserving_mgmt` | 새로가져오기 | ✅ TD-05 해결 (`WHERE portal=?`) |
 | `automation_runner._reset_batch` list phase | (호출 시) | ✅ no-op — clients wipe 제거 |
-| `main_window._on_delete_all_clients` | 사용자 '모두 삭제' | ⬜ **의도 UX 유지** (확인 다이얼로그). TD-06 시 Service 계층으로 |
+| `main_window._on_delete_all_clients` | 사용자 '모두 삭제' | ✅ **의도 UX 유지** (확인 다이얼로그). 계층 분리는 TD-06 범위로 유지 |
 
 ---
 
@@ -211,7 +212,7 @@
 
 1. ~~**TD-08**~~ — 우선순위 하향. `Portal()` 호출부가 0곳이라 급하지 않고, 1줄이 아니라 2곳 수정이다. 구조 작업 시 함께.
 2. ~~**TD-01**~~ — ✅ 해결됨(2026-07-20).
-3. ~~**TD-05 + TD-17 + TD-02 + TD-10**~~ — ✅/🟦 2026-07-25 (옵션 A). 골든 없이도 단위테스트로 고정.
+3. ~~**TD-05 + TD-02 + TD-10**~~ — ✅ 2026-07-25 (옵션 A). 골든 없이도 단위테스트로 고정. TD-17도 같은 변경으로 ✅ 해결.
 4. **[골든 선행]** Wave 3 골든 스냅샷 기준선 캡처 (TD-04/13 작업 전 권장 — `refactoring-handoff` §2.6)
 5. **TD-03 / TD-04 / TD-06 / TD-13** — 구조 분할 (Wave 3/4 정렬, 동작 보존). TD-13 의 `tests/test_engine.py` 는 이 작업의 회귀 기준선이므로 보존.
 6. **TD-09** — auth_config 상수 이동 (역참조 해소)
@@ -228,6 +229,7 @@
 
 | 일자 | HEAD | 내용 |
 |---|---|---|
+| 2026-08-19 | `f99ee68` | **현재 GUI 완성본 재검증.** PR #13의 NPS 검색구분 콤보·수임처명 대괄호 경로·WEHAGO F4 클릭 폴백 수정은 기존 TD 상태를 변경하지 않음. TD-17은 의도된 전체삭제 UX를 결함으로 보지 않아 ✅ 해결로 정정. 전체 테스트 358 passed. |
 | 2026-08-19 | `e58a3f8` | **NPS 사칭 유의사항 공지 자동 닫기** (부채 항목 아님). `dismiss_blocking_popups`: 가변 ChildFrame ID + chk00('오늘 하루 그만보기') + dispatchEvent. 단일·병렬 공통. TD 상태 변경 없음. |
 | 2026-08-19 | `6ef206c` | **전 항목 코드 재검증 (v1.1.12).** TD 상태 변경 없음(⬜/🟦/✅ 그대로). 줄수·줄번호·포털 수 정정: `db.py` 1,228 / runner 1,344·6포털 / MainWindow 1,639 / 번들 387MB. `Portal` 에 WETAX 추가됨(COMWEL 여전히 없음). **PE-P0-5 ✅** (`9c34613`, v1.1.5) — TD-19 포인터만 갱신. LV-3 `adjustment==0` pytest 0건 확인. 신규 TD 없음. **코드 리팩터 미실시.** |
 | 2026-08-07 | (문서 커밋) | **TD-19 연계 문서 재검증.** `parallel-edi-refactoring-backlog.md` 전 항목 코드 대조(서브에이전트 2종) — 당시 PE 전부 VALID. 백로그 문구 정밀화 + Wave D1/D2 분리만. **코드 리팩터 미실시.** |

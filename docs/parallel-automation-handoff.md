@@ -375,11 +375,11 @@ state-bleed 클래스 전체를 근본 차단(not-found 경로만 고치면 다�
 `return False`(`workflow_ok` 플래그). cleanup(`_close_edi_tabs`)은 성공/실패 무관 항상 실행.
 → not-found 다음 수임처가 잘못된/없는 자료로 끝나도 이제 "실패"로 정상 보고.
 
-### 12.4 전환 검증+retry (Part 2) — 후순위 미뤄둠
-`select_firm` 후 스위치 반영 검증(`current_firm_name`/`name_match`) + 불일치 시 리셋·재시도는
-주로 **병렬/백그라운드 Chrome 의 click-no-op** 방어용. 보고된 **단독(포어그라운드) 버그는
-패턴이 분명해 stale-page(Part 1) 가 원인** → Part 1+3 로 해결. 추후 무작위 실패 시 추가
-(헬퍼를 `_firm_selector.py` 로 이동해 공유).
+### 12.4 전환 검증+retry (Part 2) — 해결 이력
+`select_firm` 후 스위치 반영 검증(`current_firm_name`/`name_match`)과 불일치 시 해당
+수임처 중단은 v1.1.5에서 구현됐다. 병렬 `run_auto_batch`가 MISMATCH를 `전환실패`로
+기록하고 해당 수임처를 건너뛰며, 실패 결과와 종료 코드까지 전파한다. 회귀 테스트는
+§19.1 및 `tests/test_nhis_parallel_batch.py`를 참조한다.
 
 ### 12.5 라이브 검증 결과 (2026-06-25)
 단독 NHIS 메뉴 선택건 `[오성아구뽈찜 → 근린건축(not-found) → 주식회사 더브라이트]` 실행:
@@ -614,7 +614,8 @@ CDP 포트가 열린 시점만 성공으로 판단해, 포털 보안모듈·공�
   종료 코드를 고정한다.
 - 보호 빌드(`python build.py`)의 Cython 스테이징·번들 검증·Inno Setup 설치 파일 생성이
   통과했다.
-- 실제 새 Windows 사용자 또는 VM에서 단일 수임처로 첫 병렬 실행을 확인해야 한다.
+- 실제 새 Windows 사용자 또는 VM에서 **현재 설치본(v1.1.12, HEAD `f99ee68`)**으로
+  단일 수임처의 첫 병렬 실행을 확인해야 한다.
   세 기관의 준비가 순차로 끝난 뒤에만 실제 수임처 업무가 동시에 시작되어야 한다.
   상세 증상·검증 기록은 [최초 실행 조사 기록](parallel-first-run-investigation.md)을 참조.
 

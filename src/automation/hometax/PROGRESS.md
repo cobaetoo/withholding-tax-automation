@@ -5,7 +5,7 @@
 
 ## 기술 스택
 - **Playwright + CDP** (Chrome DevTools Protocol)
-- Chrome을 `--remote-debugging-port=9222`로 실행 후 Playwright로 연결
+- Chrome을 `--remote-debugging-port=9223`로 실행 후 Playwright로 연결
 - **Human-in-the-loop**: 홈택스 로그인은 사용자가 수동으로 완료
 
 ## 자동화된 프로세스 (6단계)
