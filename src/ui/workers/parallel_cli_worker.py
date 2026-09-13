@@ -295,11 +295,14 @@ class ParallelCliRunner(QThread):
             if sys.platform == "win32":
                 try:
                     if proc.poll() is None:
+                        # CREATE_NO_WINDOW 필수 — 없으면 정지할 때마다 child 수만큼
+                        # 검은 콘솔 창이 뜬다(GUI 는 --windowed 라 콘솔이 없다).
                         subprocess.run(
                             ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                             timeout=5,
+                            creationflags=subprocess.CREATE_NO_WINDOW,
                         )
                 except Exception:
                     pass

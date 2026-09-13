@@ -16,6 +16,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 from playwright.async_api import async_playwright
+from src.config import DEBUG_DIR
 from src.utils.chrome_cdp import CDP_PORT, launch_chrome, mark_parallel_profile_ready
 from src.automation.nhis._common_edi import (
     log, NHIS_EDI_URL, NHIS_EDI_MAIN,
@@ -236,11 +237,11 @@ async def run_full_auto(page, context):
             traceback.print_exc()
 
 
-_TRACE_PATH = os.path.join("debug", "nhis_parallel_trace.log")
+_TRACE_PATH = os.path.join(DEBUG_DIR, "nhis_parallel_trace.log")
 
 
 def _trace(msg: str):
-    """병렬 NHIS 수임처 선택/전환 진단용 파일 로그 (debug/nhis_parallel_trace.log).
+    """병렬 NHIS 수임처 선택/전환 진단용 파일 로그 (DEBUG_DIR/nhis_parallel_trace.log).
 
     select_firm 은 '어떤 행을 클릭했는지'만 알 뿐, 그 클릭이 실제로 사업장 전환을
     일으켰는지는 모른다. 9224 백그라운드 Chrome 에서 fn_firmChang click 가 no-op
@@ -248,7 +249,7 @@ def _trace(msg: str):
     돌아온다. 전환 검증 결과를 파일로 남겨 원인을 확정한다.
     """
     try:
-        os.makedirs("debug", exist_ok=True)
+        os.makedirs(DEBUG_DIR, exist_ok=True)
         with open(_TRACE_PATH, "a", encoding="utf-8") as f:
             f.write(msg + "\n")
     except Exception:

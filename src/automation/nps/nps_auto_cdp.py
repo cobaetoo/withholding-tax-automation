@@ -16,6 +16,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 from playwright.async_api import async_playwright
+from src.config import DEBUG_DIR
 from src.utils.chrome_cdp import CDP_PORT, launch_chrome, mark_parallel_profile_ready
 from src.utils.save_path import make_save_dir
 
@@ -42,11 +43,11 @@ from src.automation.nps._common import (
 )
 
 
-_TRACE_PATH = os.path.join("debug", "nps_parallel_trace.log")
+_TRACE_PATH = os.path.join(DEBUG_DIR, "nps_parallel_trace.log")
 
 
 def _trace(msg: str):
-    """병렬 NPS 사업장 선택 진단용 파일 로그 (debug/nps_parallel_trace.log).
+    """병렬 NPS 사업장 선택 진단용 파일 로그 (DEBUG_DIR/nps_parallel_trace.log).
 
     NHIS 의 _trace 와 대칭. select_workplace 가 '어떤 행을 클릭했는지'(관리번호
     정확일치 행 / 이름 fallback / 발견 row)는 내부 log() 로 GUI 패널에 나간다.
@@ -55,7 +56,7 @@ def _trace(msg: str):
     없어 클릭 결정 자체만 기록한다.)
     """
     try:
-        os.makedirs("debug", exist_ok=True)
+        os.makedirs(DEBUG_DIR, exist_ok=True)
         with open(_TRACE_PATH, "a", encoding="utf-8") as f:
             f.write(msg + "\n")
     except Exception:

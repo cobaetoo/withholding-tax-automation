@@ -24,6 +24,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 from playwright.async_api import async_playwright
+from src.config import DEBUG_DIR
 from src.utils.chrome_cdp import CDP_PORT, launch_chrome, mark_parallel_profile_ready
 
 # 저장 최상위 폴더명(site_name). CLI --save-site 로 오버라이드 — 병렬 실행 시
@@ -48,13 +49,13 @@ from src.automation.comwel._download import (
 )
 
 
-_TRACE_PATH = os.path.join("debug", "comwel_parallel_trace.log")
+_TRACE_PATH = os.path.join(DEBUG_DIR, "comwel_parallel_trace.log")
 
 
 def _trace(msg: str):
     """병렬 comwel 사업장 선택 진단용 파일 로그."""
     try:
-        os.makedirs("debug", exist_ok=True)
+        os.makedirs(DEBUG_DIR, exist_ok=True)
         with open(_TRACE_PATH, "a", encoding="utf-8") as f:
             f.write(msg + "\n")
     except Exception:

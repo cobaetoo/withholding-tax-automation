@@ -30,6 +30,12 @@ DB_PATH = os.path.join(DB_DIR, "withholding_tax.db")
 # 결과 저장 경로
 RESULTS_DIR = os.path.join(APP_DATA_DIR, "results")
 
+# 진단용 파일 로그(병렬 trace) 위치.
+# frozen 실행은 gui_main 이 CWD 를 설치 폴더로 바꾸므로, 상대경로 "debug/" 로
+# 쓰면 설치 폴더 안에 Inno Setup 이 모르는 폴더가 생긴다. 그러면 제거 시
+# 설치 폴더가 비지 않아 폴더째 남는다. APP_DATA_DIR 하위로 고정한다.
+DEBUG_DIR = os.path.join(APP_DATA_DIR, "debug")
+
 # 포털 URL
 PORTAL_URLS = {
     "wehago": "https://www.wehago.com/",

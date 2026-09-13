@@ -26,6 +26,15 @@ CDP_PORT = int(os.environ.get("WTAX_CDP_PORT", "9223"))
 # IPv4(127.0.0.1) 디버그 서버와 연결이 간헐 실패(연결 거부)한다.
 CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
 
+# taskkill/netstat/tasklist/reg/cmd 는 콘솔 프로그램이라, --windowed GUI 앱에서
+# 그냥 호출하면 호출할 때마다 검은 콘솔 창이 깜빡인다. 특히 '정지'는 child 3개
+# taskkill + 포트 3개 netstat + PID 별 taskkill 이 연달아 돌아 창이 무더기로 뜬다.
+_NO_WINDOW = (
+    {"creationflags": subprocess.CREATE_NO_WINDOW}
+    if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW")
+    else {}
+)
+
 # 병렬(포트 분리)에서 자기 Chrome PID만 정밀 종료하기 위한 레지스트리: port → pid.
 # _attempt_launch 가 Popen.pid 를 등록하고 kill_chrome(port=...)이 조회한다.
 _launched_pids: dict[int, int] = {}
@@ -56,7 +65,7 @@ def find_chrome():
              r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
              "/ve"],
             capture_output=True, text=True, encoding="oem", errors="ignore",
-            timeout=5,
+            timeout=5, **_NO_WINDOW,
         )
         for line in result.stdout.splitlines():
             line = line.strip()
@@ -138,14 +147,14 @@ def _create_junction(user_data_dir):
         except OSError:
             subprocess.run(
                 ["cmd", "/c", "rmdir", "/S", "/Q", junc],
-                capture_output=True, timeout=5,
+                capture_output=True, timeout=5, **_NO_WINDOW,
             )
 
     # junction 생성
     result = subprocess.run(
         ["cmd", "/c", "mklink", "/J", junc, user_data_dir],
         capture_output=True, text=True, encoding="oem", errors="ignore",
-        timeout=10,
+        timeout=10, **_NO_WINDOW,
     )
     if not os.path.exists(junc):
         raise RuntimeError(f"Junction 생성 실패: {result.stderr}")
@@ -162,6 +171,22 @@ def check_cdp_available(*, url: str = CDP_URL):
         return False
 
 
+def _taskkill(*args) -> None:
+    """taskkill 을 콘솔 창 없이, 무한 대기 없이 실행한다(실패는 무시).
+
+    '정지'는 GUI 스레드에서 호출된다. Chrome 프로세스 트리를 도는 동안 응답이
+    없으면 창이 그대로 떠 있고 UI 도 멈추므로 timeout 을 둔다.
+    """
+    try:
+        subprocess.run(
+            ["taskkill", *args],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=10, **_NO_WINDOW,
+        )
+    except Exception:
+        pass
+
+
 def kill_chrome(*, pid: int | None = None, port: int | None = None):
     """Chrome 종료. 인자 없음=전체 kill(콜드부팅 폴백, 현행 동작 보존).
     pid 지정=해당 PID 트리만(taskkill /PID /T). port 지정=_launched_pids[port]로 pid 해석.
@@ -175,10 +200,7 @@ def kill_chrome(*, pid: int | None = None, port: int | None = None):
             if port is not None:
                 _launched_pids.pop(port, None)
             return
-        subprocess.run(
-            ["taskkill", "/PID", str(pid), "/T", "/F"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+        _taskkill("/PID", str(pid), "/T", "/F")
         if port is not None:
             _launched_pids.pop(port, None)
         return
@@ -191,10 +213,7 @@ def kill_chrome(*, pid: int | None = None, port: int | None = None):
     )
     if is_parallel:
         return
-    subprocess.run(
-        ["taskkill", "/F", "/IM", "chrome.exe", "/T"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    _taskkill("/F", "/IM", "chrome.exe", "/T")
 
 
 def kill_chrome_by_port(port: int) -> list[int]:
@@ -212,7 +231,7 @@ def kill_chrome_by_port(port: int) -> list[int]:
     try:
         r = subprocess.run(
             ["netstat", "-ano"], capture_output=True, text=True,
-            encoding="oem", errors="ignore", timeout=8,
+            encoding="oem", errors="ignore", timeout=8, **_NO_WINDOW,
         )
     except Exception:
         return []
@@ -227,10 +246,7 @@ def kill_chrome_by_port(port: int) -> list[int]:
                 pids.append(int(pid))
     killed: list[int] = []
     for pid in dict.fromkeys(pids):  # 중복 제거(순서 보존)
-        subprocess.run(
-            ["taskkill", "/PID", str(pid), "/T", "/F"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+        _taskkill("/PID", str(pid), "/T", "/F")
         killed.append(pid)
     return killed
 
@@ -241,7 +257,7 @@ def _chrome_process_running() -> bool:
         r = subprocess.run(
             ["tasklist", "/FI", "IMAGENAME eq chrome.exe", "/FO", "CSV", "/NH"],
             capture_output=True, text=True, encoding="oem", errors="ignore",
-            timeout=5,
+            timeout=5, **_NO_WINDOW,
         )
         out = r.stdout.strip()
         if not out:
@@ -260,7 +276,7 @@ def _process_running(pid: int) -> bool:
         r = subprocess.run(
             ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
             capture_output=True, text=True, encoding="oem", errors="ignore",
-            timeout=5,
+            timeout=5, **_NO_WINDOW,
         )
         out = r.stdout.strip()
         return bool(out) and str(pid) in out and "chrome.exe" in out.lower()
@@ -288,6 +304,12 @@ def _attempt_launch(chrome_path, junc, profile, url, *, port=CDP_PORT, kill_wait
         # 좁으면 GNB 메뉴를 숨기므로, 모든 PC/해상도에서 1920x1080 을 보장하려면
         # Chrome 프로세스 수준에서 고정 (--window-size). set_viewport_size 와 이중 방어.
         "--window-size=1920,1080",
+        # 병렬 전용 프로필(cdp-{port})은 '한 번도 안 쓴 Chrome'이라 첫 실행 때 환영/
+        # 로그인 유도(First Run Experience)와 기본 브라우저 확인 창이 뜬다. 그 창이
+        # 포털 창을 가려 EDI 로그인을 못 하는데 CDP 포트는 이미 열려 있어 launch 는
+        # 성공으로 판정되므로 자동화가 그대로 멈춘다(신규 설치 PC 재발).
+        "--no-first-run",
+        "--no-default-browser-check",
         # webdriver=true 원천 차단 — a2f9c11이 --test-type(탐지신호라 제거 맞음)과
         # 함께 묶어 삭제한 플래그 복원. NHIS EDI 보안프로그램이 navigator.webdriver
         # 를 감지해 페이지를 무한 리로드(로그인 루프)하는 것을 막는다. blink 레벨에서
@@ -332,6 +354,7 @@ def _attempt_launch(chrome_path, junc, profile, url, *, port=CDP_PORT, kill_wait
                 start_cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                **_NO_WINDOW,
             )
     else:
         proc = subprocess.Popen(chrome_args, **popen_kwargs)
